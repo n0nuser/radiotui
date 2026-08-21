@@ -33,7 +33,9 @@ def test_noise_floor_tracks_median():
 
 def test_extract_peaks_finds_strong_signal():
     frame = make_frame({88.35e6: -30.0})
-    peaks = extract_peaks(frame, floor_db=-60.0, threshold_db=-51.0, min_snr_db=4.0, merge_gap_bins=3)
+    peaks = extract_peaks(
+        frame, floor_db=-60.0, threshold_db=-51.0, min_snr_db=4.0, merge_gap_bins=3
+    )
     assert len(peaks) == 1
     assert peaks[0].center_hz == pytest.approx(88.35e6, abs=3e3)
     assert peaks[0].snr_db > 25
@@ -41,7 +43,9 @@ def test_extract_peaks_finds_strong_signal():
 
 def test_extract_peaks_ignores_noise():
     frame = make_frame({})
-    peaks = extract_peaks(frame, floor_db=-60.0, threshold_db=-51.0, min_snr_db=4.0, merge_gap_bins=3)
+    peaks = extract_peaks(
+        frame, floor_db=-60.0, threshold_db=-51.0, min_snr_db=4.0, merge_gap_bins=3
+    )
     assert peaks == []
 
 
@@ -49,7 +53,6 @@ def test_tracker_requires_persistence():
     settings = ScannerSettings(min_persist_frames=3)
     tracker = ChannelTracker(settings)
     now = 1000.0
-    peaks = []
     frame = make_frame({88.35e6: -30.0})
     active = tracker.update(extract_peaks(frame, -60.0, -51.0, 4.0, 3), now=now)
     assert active == []

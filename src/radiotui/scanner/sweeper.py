@@ -9,7 +9,7 @@ import time
 import numpy as np
 
 from radiotui.config import ScannerSettings
-from radiotui.core.models import ScanState
+from radiotui.core.models import ScanState, SpectrumFrame
 from radiotui.dsp.detector import ChannelTracker, NoiseFloorEstimator, extract_peaks
 from radiotui.dsp.spectrum import SweepPlan, compute_psd, frame_from_plan
 from radiotui.sdr.base import SdrDevice
@@ -21,7 +21,7 @@ class Sweeper:
         device: SdrDevice,
         plan: SweepPlan,
         settings: ScannerSettings,
-        out_queue: "queue.Queue[ScanState]",
+        out_queue: queue.Queue[ScanState],
     ) -> None:
         self._device = device
         self._plan = plan
@@ -55,11 +55,11 @@ class Sweeper:
             self._thread = None
 
     def _run(self) -> None:
-        dwell = getattr(self._settings, "hop_dwell_s", 0.12)
-        samples_per_hop = max(int(self._plan.sample_rate_hz * dwell), self._plan.fft_size * 4)
-        dc_mask_hz = (
-            self._plan.sample_rate_hz * 0.03 if self._device.is_real else 0.0
+        samples_per_hop = max(
+            int(self._plan.sample_rate_hz * self._settings.hop_dwell_s),
+            self._plan.fft_size * 4,
         )
+        dc_mask_hz = self._plan.sample_rate_hz * 0.03 if self._device.is_real else 0.0
         while not self._stop.is_set():
             t0 = time.time()
             hops = []
@@ -69,7 +69,7 @@ class Sweeper:
                 try:
                     self._device.set_center_freq_hz(center)
                     iq = self._device.read_samples(samples_per_hop)
-                except Exception as exc:
+                except (OSError, RuntimeError, ValueError) as exc:
                     self._queue.put(_error_state(str(exc)))
                     return
                 psd = compute_psd(iq, self._plan.fft_size)
@@ -103,10 +103,6 @@ class Sweeper:
 
 
 def _error_state(message: str) -> ScanState:
-    import numpy as np
-
-    from radiotui.core.models import SpectrumFrame
-
     return ScanState(
         frame=SpectrumFrame(freqs_hz=np.array([0.0]), power_db=np.array([-200.0])),
         channels=[],

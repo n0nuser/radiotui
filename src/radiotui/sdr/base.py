@@ -37,7 +37,7 @@ class SdrDevice(ABC):
     @abstractmethod
     def read_samples(self, count: int) -> np.ndarray: ...
 
-    def __enter__(self) -> "SdrDevice":
+    def __enter__(self) -> SdrDevice:
         self.open()
         return self
 

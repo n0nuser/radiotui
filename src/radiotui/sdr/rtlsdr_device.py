@@ -21,17 +21,15 @@ class RtlSdrDevice(SdrDevice):
 
     def __init__(self, device_index: int = 0) -> None:
         if not _HAS_RTLSDR:
-            raise DeviceUnavailable(
-                "pyrtlsdr is not installed (uv sync --extra sdr)"
-            )
+            raise DeviceUnavailable("pyrtlsdr is not installed (uv sync --extra sdr)")
         self._index = device_index
-        self._sdr: "RtlSdr | None" = None
+        self._sdr: RtlSdr | None = None
 
     def open(self) -> None:
         try:
             sdr = RtlSdr(device_index=self._index)
             sdr.set_direct_sampling(0)
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             raise DeviceUnavailable(f"no RTL-SDR device found: {exc}") from exc
         self._sdr = sdr
 
@@ -39,7 +37,7 @@ class RtlSdrDevice(SdrDevice):
         if self._sdr is not None:
             try:
                 self._sdr.close()
-            except Exception:
+            except OSError:
                 pass
             self._sdr = None
 
@@ -77,8 +75,10 @@ def detect_real_devices(max_probe: int = 4) -> list[str]:
         try:
             dev = RtlSdrDevice(idx)
             with dev:
-                serial = getattr(dev._sdr, "device_serial_number", f"index {idx}")
+                serial = f"index {idx}"
+                if hasattr(dev._sdr, "device_serial_number"):
+                    serial = dev._sdr.device_serial_number
                 found.append(f"RTL-SDR #{idx} (serial {serial})")
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             continue
     return found

@@ -110,9 +110,7 @@ class SimulatedDevice(SdrDevice):
                     + 0.7 * np.sin(2 * np.pi * 1300 * t + 2.1 * carrier.phase)
                     + 0.4 * np.sin(2 * np.pi * 2400 * t + 0.7 * carrier.phase)
                 )
-                inst_phase = 2 * np.pi * (
-                    offset * t + dev_scale * 1_200 * np.cumsum(voice) / fs
-                )
+                inst_phase = 2 * np.pi * (offset * t + dev_scale * 1_200 * np.cumsum(voice) / fs)
                 sig = amp * np.exp(1j * inst_phase) * envelope
             iq += sig.astype(np.complex128)
 
@@ -121,9 +119,7 @@ class SimulatedDevice(SdrDevice):
             iq *= 0.95 / peak
         return iq
 
-    def _envelope(
-        self, carrier: SimCarrier, count: int, fs: float, t_start: float
-    ) -> np.ndarray:
+    def _envelope(self, carrier: SimCarrier, count: int, fs: float, t_start: float) -> np.ndarray:
         if carrier.duty_cycle >= 1.0:
             return np.ones(count)
         period_samples = int(carrier.burst_period_s * fs)

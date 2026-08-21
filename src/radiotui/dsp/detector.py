@@ -7,7 +7,7 @@ from collections import deque
 
 import numpy as np
 
-from radiotui.config import ScannerSettings
+from radiotui.config import BANDS, ScannerSettings
 from radiotui.core.models import Channel, DemodMode, Peak, SpectrumFrame
 
 
@@ -54,7 +54,9 @@ def extract_peaks(
         if snr_db < min_snr_db:
             continue
         bandwidth_hz = max(len(group) * bin_hz, bin_hz)
-        peaks.append(Peak(center_hz=center_hz, bandwidth_hz=bandwidth_hz, peak_db=peak_db, snr_db=snr_db))
+        peaks.append(
+            Peak(center_hz=center_hz, bandwidth_hz=bandwidth_hz, peak_db=peak_db, snr_db=snr_db)
+        )
     return peaks
 
 
@@ -68,13 +70,9 @@ class ChannelTracker:
         return round(freq_hz / 5_000.0) * 5_000.0
 
     def _demod_for(self, freq_hz: float) -> DemodMode:
-        from radiotui.config import BANDS
-
         for band in BANDS.values():
             if band.start_hz <= freq_hz <= band.end_hz:
                 return band.demod
-        if freq_hz > 300e6:
-            return DemodMode.NFM
         return DemodMode.NFM
 
     def update(self, peaks: list[Peak], now: float | None = None) -> list[Channel]:
@@ -86,7 +84,9 @@ class ChannelTracker:
             matched_keys.add(key)
             channel = self.channels.get(key)
             if channel is not None:
-                self.channels[key] = channel.touch(peak.peak_db, peak.snr_db, peak.bandwidth_hz, now)
+                self.channels[key] = channel.touch(
+                    peak.peak_db, peak.snr_db, peak.bandwidth_hz, now
+                )
                 self._pending.pop(key, None)
             else:
                 count = self._pending.get(key, 0) + 1

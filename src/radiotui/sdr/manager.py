@@ -2,28 +2,32 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from radiotui.sdr.base import DeviceUnavailable, SdrDevice
+from radiotui.sdr.rtlsdr_device import RtlSdrDevice, detect_real_devices
 from radiotui.sdr.simulator import SimulatedDevice
 
 
-def open_device(prefer_real: bool = True) -> tuple[SdrDevice, bool]:
-    """Return an open device. Second element is True when it is real hardware."""
+@dataclass(frozen=True)
+class OpenedDevice:
+    device: SdrDevice
+    is_real: bool
+
+
+def open_device(prefer_real: bool = True) -> OpenedDevice:
     if prefer_real:
         try:
-            from radiotui.sdr.rtlsdr_device import RtlSdrDevice
-
             dev = RtlSdrDevice()
             dev.open()
-            return dev, True
+            return OpenedDevice(device=dev, is_real=True)
         except DeviceUnavailable:
             pass
-    return SimulatedDevice(), False
+    return OpenedDevice(device=SimulatedDevice(), is_real=False)
 
 
 def describe_devices() -> list[str]:
     try:
-        from radiotui.sdr.rtlsdr_device import detect_real_devices
-
         return detect_real_devices()
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return []

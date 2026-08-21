@@ -20,7 +20,7 @@ def make_nfm_iq(fs=1_024_000.0, tone_hz=1000.0, dev=5000.0, seconds=0.05, offset
     phase = 2 * np.pi * (offset_hz * t + dev * np.cumsum(voice) / fs)
     iq = 0.5 * np.exp(1j * phase)
     rng = np.random.default_rng(7)
-    iq += (rng.normal(0, 0.01, len(t)) + 1j * rng.normal(0, 0.01, len(t)))
+    iq += rng.normal(0, 0.01, len(t)) + 1j * rng.normal(0, 0.01, len(t))
     return iq
 
 
@@ -44,12 +44,20 @@ def test_frequency_shift_moves_tone():
     assert freqs[np.argmax(spectrum)] == pytest.approx(1000.0, abs=300.0)
 
 
-def test_channel_audio_output_rate():
+@pytest.mark.parametrize(
+    "mode,decimation",
+    [
+        (DemodMode.NFM, 8),
+        (DemodMode.WFM, 4),
+        (DemodMode.AM, 8),
+    ],
+)
+def test_channel_audio_output_rate(mode, decimation):
     iq = make_nfm_iq(seconds=0.2)
-    audio, rate = channel_audio(iq, 1_024_000.0, DemodMode.NFM, output_rate_hz=48_000)
-    assert rate == 48_000
-    expected = int(0.2 * 48_000) - 8
+    audio = channel_audio(iq, 1_024_000.0, mode, output_rate_hz=48_000)
+    expected = int(0.2 * 48_000) - decimation
     assert abs(len(audio) - expected) < 2000
+    assert audio.dtype == np.float32
 
 
 def test_demod_am_envelope():

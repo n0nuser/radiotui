@@ -17,7 +17,10 @@ from radiotui.antenna.advisor import analyze, format_report
 from radiotui.config import BANDS, Band, Settings, band_by_name
 from radiotui.core.models import DemodMode
 from radiotui.dsp.spectrum import SweepPlan
-from radiotui.sdr.manager import describe_devices, open_device
+from radiotui.scanner.monitor import ChannelMonitor
+from radiotui.scanner.sweeper import Sweeper
+from radiotui.sdr.base import SdrDevice
+from radiotui.sdr.manager import OpenedDevice, describe_devices, open_device
 
 console = Console()
 
@@ -49,22 +52,23 @@ def resolve_band(args) -> Band:
             console.print("[red]--end must be greater than --start[/red]")
             raise SystemExit(2)
         demod = DemodMode(args.demod) if args.demod else DemodMode.NFM
-        return Band("custom", f"{args.start:g}-{args.end:g} MHz", args.start * 1e6, args.end * 1e6, demod)
+        label = f"{args.start:g}-{args.end:g} MHz"
+        return Band("custom", label, args.start * 1e6, args.end * 1e6, demod)
     console.print("[red]provide --band or both --start and --end[/red]")
     raise SystemExit(2)
 
 
-def open_device_or_exit(force_sim: bool):
-    device, is_real = open_device(prefer_real=not force_sim)
-    if is_real:
-        console.print(f"[green]Using real device:[/] {device.name}")
+def open_device_or_exit(force_sim: bool) -> SdrDevice:
+    opened: OpenedDevice = open_device(prefer_real=not force_sim)
+    if opened.is_real:
+        console.print(f"[green]Using real device:[/] {opened.device.name}")
     else:
         console.print(
             "[yellow]No RTL-SDR hardware found - using SIMULATED device.[/yellow]\n"
             "[dim]Install pyrtlsdr + librtlsdr for real reception "
             "(uv sync --extra sdr).[/dim]"
         )
-    return device
+    return opened.device
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,12 +132,16 @@ def cmd_scan(args) -> None:
     device = open_device_or_exit(args.sim)
     out: queue.Queue = queue.Queue(maxsize=4)
 
-    from radiotui.scanner.sweeper import Sweeper
-
-    plan = SweepPlan.build(band.start_hz, band.end_hz, settings.scanner.sample_rate_hz, settings.scanner.fft_size)
+    plan = SweepPlan.build(
+        band.start_hz, band.end_hz, settings.scanner.sample_rate_hz, settings.scanner.fft_size
+    )
     sweeper = Sweeper(device, plan, settings.scanner, out)
     sweeper.start()
-    console.print(f"Sweeping [bold]{band.label}[/bold]: {band.start_hz/1e6:.3f} - {band.end_hz/1e6:.3f} MHz ({len(plan.hop_centers_hz)} hops). Ctrl+C to stop.")
+    console.print(
+        f"Sweeping [bold]{band.label}[/bold]:"
+        f" {band.start_hz / 1e6:.3f} - {band.end_hz / 1e6:.3f} MHz"
+        f" ({len(plan.hop_centers_hz)} hops). Ctrl+C to stop."
+    )
 
     t0 = time.time()
     try:
@@ -158,7 +166,11 @@ def cmd_scan(args) -> None:
 
 
 def render_scan(state) -> Table:
-    table = Table(title=f"sweep #{state.sweeps_done}  floor {state.noise_floor_db:.1f} dB  threshold {state.threshold_db:.1f} dB")
+    title = (
+        f"sweep #{state.sweeps_done}  "
+        f"floor {state.noise_floor_db:.1f} dB  threshold {state.threshold_db:.1f} dB"
+    )
+    table = Table(title=title)
     table.add_column("Frequency", justify="right")
     table.add_column("BW kHz", justify="right")
     table.add_column("Peak dB", justify="right")
@@ -167,8 +179,8 @@ def render_scan(state) -> Table:
     table.add_column("Demod")
     for ch in sorted(state.channels, key=lambda c: c.peak_db, reverse=True)[:15]:
         table.add_row(
-            f"{ch.center_hz/1e6:.4f}",
-            f"{ch.bandwidth_hz/1e3:.0f}",
+            f"{ch.center_hz / 1e6:.4f}",
+            f"{ch.bandwidth_hz / 1e3:.0f}",
             f"{ch.peak_db:.1f}",
             f"{ch.snr_db:.1f}",
             str(ch.hits),
@@ -177,14 +189,11 @@ def render_scan(state) -> Table:
     return table
 
 
-def run_monitor(args, freq: float, record_only: bool = False):
-    from radiotui.audio.recorder import VoxRecorder
-    from radiotui.scanner.monitor import ChannelMonitor
-
+def run_monitor(args, freq: float):
     settings = Settings()
     settings.scanner.gain_db = args.gain
     demod = DemodMode(args.demod) if args.demod else guess_demod(freq)
-    device = open_device_or_exit(getattr(args, "sim", False))
+    device = open_device_or_exit(args.sim)
     monitor = ChannelMonitor(device, freq, demod, settings, muted=False)
     monitor.recorder.on_clip_end = lambda clip: console.print(
         f"[green]clip saved[/green] {clip.path.name} ({clip.seconds:.1f}s)"
@@ -195,14 +204,11 @@ def run_monitor(args, freq: float, record_only: bool = False):
 def cmd_listen(args) -> None:
     device, monitor = run_monitor(args, args.freq)
     mode = monitor.demod.value
+    monitor.recorder.enabled = args.record
+    record_note = " Recording active clips." if args.record else ""
     console.print(
-        f"Listening [bold]{args.freq/1e6:.4f} MHz[/bold] ({mode}). "
-        "Ctrl+C to stop." + (" Recording active clips." if args.record else "")
+        f"Listening [bold]{args.freq / 1e6:.4f} MHz[/bold] ({mode}). Ctrl+C to stop." + record_note
     )
-    if args.record:
-        monitor.recorder.on_clip_end = lambda clip: console.print(
-            f"[green]clip saved[/green] {clip.path.name} ({clip.seconds:.1f}s)"
-        )
     try:
         monitor.start()
         while monitor.running:
@@ -218,9 +224,11 @@ def cmd_listen(args) -> None:
 def cmd_record(args) -> None:
     device, monitor = run_monitor(args, args.freq)
     monitor.set_muted(True)
+    monitor.recorder.enabled = True
+    clips_dir = monitor.recorder.directory
     console.print(
-        f"Recording [bold]{args.freq/1e6:.4f} MHz[/bold] ({monitor.demod.value}) "
-        f"to ./{monitor.recorder._dir}/ - Ctrl+C to stop."
+        f"Recording [bold]{args.freq / 1e6:.4f} MHz[/bold] ({monitor.demod.value}) "
+        f"to {clips_dir}/ - Ctrl+C to stop."
     )
     t0 = time.time()
     try:
@@ -245,8 +253,6 @@ def cmd_antenna(args) -> None:
 
 
 def cmd_tuner(args) -> None:
-    from radiotui.scanner.monitor import ChannelMonitor
-
     settings = Settings()
     settings.scanner.gain_db = args.gain
     demod = DemodMode(args.demod) if args.demod else guess_demod(args.freq)
@@ -258,7 +264,9 @@ def cmd_tuner(args) -> None:
         peak_hold["db"] = max(peak_hold["db"] * 0.995, db)
 
     monitor.on_rssi = on_rssi
-    console.print(f"Tuner on {args.freq/1e6:.4f} MHz ({demod.value}) - move the antenna! Ctrl+C to exit.")
+    console.print(
+        f"Tuner on {args.freq / 1e6:.4f} MHz ({demod.value}) - move the antenna! Ctrl+C to exit."
+    )
     try:
         monitor.start()
         with Live(console=console, refresh_per_second=10) as live:
@@ -280,9 +288,14 @@ def render_meter(rssi: float, peak: float, freq: float) -> Panel:
     bar = Text("█" * filled + "░" * (width - filled))
     bar.stylize("green" if frac < 0.7 else "yellow" if frac < 0.9 else "red", 0, filled)
     delta = rssi - peak
-    trend = "" if delta > -0.5 else "  [red]▼ worse[/red]" if delta > -3 else "  [red]▼▼ much worse[/red]"
+    if delta > -0.5:
+        trend = ""
+    elif delta > -3:
+        trend = "  [red]▼ worse[/red]"
+    else:
+        trend = "  [red]▼▼ much worse[/red]"
     body = Group(
-        Text(f"{freq/1e6:.4f} MHz   RSSI {rssi:6.1f} dBFS   peak {peak:6.1f}"),
+        Text(f"{freq / 1e6:.4f} MHz   RSSI {rssi:6.1f} dBFS   peak {peak:6.1f}"),
         bar,
         Text(f"{delta:+.1f} dB vs peak{trend}"),
     )
@@ -300,11 +313,11 @@ COMMANDS = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    from radiotui.tui.app import run_tui
+
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command or args.command == "tui":
-        from radiotui.tui.app import run_tui
-
         return run_tui(force_sim=args.sim)
     COMMANDS[args.command](args)
     return 0

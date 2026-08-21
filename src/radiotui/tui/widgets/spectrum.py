@@ -42,12 +42,7 @@ class SpectrumBar(Widget):
     def render_line(self, y: int) -> Strip:
         width = self.size.width
         height = self.size.height or 1
-        if (
-            self.freqs is None
-            or len(self.freqs) == 0
-            or width <= 0
-            or y >= height - 1
-        ):
+        if self.freqs is None or len(self.freqs) == 0 or width <= 0 or y >= height - 1:
             return Strip.blank(width)
 
         db_lo = self.floor_db - 5.0

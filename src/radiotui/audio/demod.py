@@ -66,19 +66,18 @@ def channel_audio(
     fs: float,
     mode: DemodMode,
     output_rate_hz: int = 48_000,
-) -> tuple[np.ndarray, float]:
-    """Full receive chain: channelize, demodulate, resample. Returns (audio, rate)."""
+) -> np.ndarray:
+    """Full receive chain: channelize, demodulate, resample to output_rate_hz."""
     factor = CHANNEL_DECIMATION[mode]
     chan_fs = fs / factor
     low = decimate(iq, factor)
     demod = DEMOD_FUNCS[mode]
     audio = demod(low, chan_fs)
     if len(audio) < 8:
-        return np.zeros(0), output_rate_hz
+        return np.zeros(output_rate_hz // 10, dtype=np.float32)
     target_len = max(int(len(audio) * output_rate_hz / chan_fs), 1)
     src_idx = np.linspace(0.0, len(audio) - 1, num=target_len)
-    audio = np.interp(src_idx, np.arange(len(audio)), audio)
-    return audio.astype(np.float32), output_rate_hz
+    return np.interp(src_idx, np.arange(len(audio)), audio).astype(np.float32)
 
 
 def rssi_dbfs(iq: np.ndarray) -> float:

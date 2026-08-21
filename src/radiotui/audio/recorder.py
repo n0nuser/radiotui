@@ -34,7 +34,6 @@ class VoxRecorder:
         self._freq = freq_hz
         self._settings = settings
         self._dir = Path(settings.recordings_dir)
-        self._dir.mkdir(parents=True, exist_ok=True)
         self._file: wave.Wave_write | None = None
         self._path: Path | None = None
         self._rate = settings.output_rate_hz
@@ -43,6 +42,10 @@ class VoxRecorder:
         self.clips: list[ClipInfo] = []
         self.on_clip_end = None
         self.enabled = False
+
+    @property
+    def directory(self) -> Path:
+        return self._dir
 
     @property
     def recording(self) -> bool:
@@ -73,6 +76,7 @@ class VoxRecorder:
         return self.clips
 
     def _open_clip(self) -> None:
+        self._dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         mhz = self._freq / 1e6
         self._path = self._dir / f"{mhz:.4f}MHz_{stamp}.wav"

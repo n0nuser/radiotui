@@ -1,4 +1,3 @@
-import numpy as np
 import pytest
 
 from radiotui.antenna.advisor import analyze, format_report
@@ -7,9 +6,7 @@ from radiotui.antenna.advisor import analyze, format_report
 def test_wavelength_math_2m_calling():
     report = analyze(145.5e6)
     assert report.wavelength_m == pytest.approx(299_792_458 / 145.5e6, rel=1e-6)
-    assert report.quarter_wave_cm == pytest.approx(
-        299_792_458 / 145.5e6 / 4 * 0.95 * 100, rel=1e-3
-    )
+    assert report.quarter_wave_cm == pytest.approx(299_792_458 / 145.5e6 / 4 * 0.95 * 100, rel=1e-3)
     assert report.dipole_leg_cm == report.quarter_wave_cm
     assert report.dipole_total_cm == pytest.approx(2 * report.quarter_wave_cm)
 

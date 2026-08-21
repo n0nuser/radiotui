@@ -17,9 +17,9 @@ from radiotui.antenna.advisor import analyze, format_report
 from radiotui.config import BANDS, Settings
 from radiotui.core.models import Channel, DemodMode, ScanState
 from radiotui.dsp.spectrum import SweepPlan
-from radiotui.sdr.manager import open_device
 from radiotui.scanner.monitor import ChannelMonitor
 from radiotui.scanner.sweeper import Sweeper
+from radiotui.sdr.manager import open_device
 from radiotui.tui.widgets.spectrum import SpectrumBar
 from radiotui.tui.widgets.waterfall import Waterfall
 
@@ -88,7 +88,7 @@ class RadioTuiApp(App):
         self.sweeper: Sweeper | None = None
         self.monitor: ChannelMonitor | None = None
         self.resume_sweep_after_listen = False
-        self.queue: "queue.Queue[ScanState]" = queue.Queue(maxsize=4)
+        self.queue: queue.Queue[ScanState] = queue.Queue(maxsize=4)
         self.band_name = "fm_broadcast"
         self.gain_db: float | None = None
         self.muted = False
@@ -123,8 +123,10 @@ class RadioTuiApp(App):
             table.add_column(label, key=key, width=width)
 
         try:
-            self.device, self.is_real = open_device(prefer_real=not self._force_sim)
-        except Exception as exc:
+            opened = open_device(prefer_real=not self._force_sim)
+            self.device = opened.device
+            self.is_real = opened.is_real
+        except (OSError, RuntimeError) as exc:
             self.log_line(f"[red]Failed to open any device: {exc}[/red]")
             return
         mode = "REAL" if self.is_real else "SIMULATED"
@@ -194,8 +196,8 @@ class RadioTuiApp(App):
         now = time.time()
         for ch in channels_sorted:
             table.add_row(
-                f"{ch.center_hz/1e6:.4f}",
-                f"{ch.bandwidth_hz/1e3:.0f}",
+                f"{ch.center_hz / 1e6:.4f}",
+                f"{ch.bandwidth_hz / 1e3:.0f}",
                 f"{ch.peak_db:.1f}",
                 f"{ch.snr_db:.1f}",
                 str(ch.hits),
@@ -239,7 +241,7 @@ class RadioTuiApp(App):
             rec = " ●REC" if self.monitor.recorder.recording else ""
             mute = " 🔇" if self.muted else ""
             parts.append(
-                f"listening {self.monitor.freq_hz/1e6:.4f} MHz "
+                f"listening {self.monitor.freq_hz / 1e6:.4f} MHz "
                 f"({self.monitor.demod.value}) {self.monitor.rssi_dbfs:.0f} dBFS{mute}{rec}"
             )
         elif self.resume_sweep_after_listen:
@@ -286,9 +288,7 @@ class RadioTuiApp(App):
         self.stop_monitor(resume_sweep=False)
         self._pause_sweeper_for_monitor()
         self.muted = muted
-        monitor = ChannelMonitor(
-            self.device, freq_hz, demod, self.settings, muted=muted
-        )
+        monitor = ChannelMonitor(self.device, freq_hz, demod, self.settings, muted=muted)
         monitor.recorder.enabled = enable_recorder
         monitor.recorder.on_clip_end = self.on_clip_end
         monitor.on_rssi = lambda db: self.post_message(self.RssiUpdate(db))
@@ -296,7 +296,7 @@ class RadioTuiApp(App):
         monitor.start()
         self.monitor = monitor
         verb = "Recording" if enable_recorder else "Listening"
-        self.log_line(f"{verb} [bold]{freq_hz/1e6:.4f} MHz[/bold] ({demod.value})")
+        self.log_line(f"{verb} [bold]{freq_hz / 1e6:.4f} MHz[/bold] ({demod.value})")
 
     def on_clip_end(self, clip) -> None:
         self.clips_saved += 1
@@ -327,8 +327,7 @@ class RadioTuiApp(App):
             recorder = self.monitor.recorder
             recorder.enabled = not recorder.enabled
             if not recorder.enabled:
-                clips = recorder.stop()
-                _ = clips
+                recorder.stop()
             self.log_line("Recording ON" if recorder.enabled else "Recording OFF")
             return
         channel = self.selected_channel()
@@ -364,32 +363,30 @@ class RadioTuiApp(App):
         self.settings.scanner.gain_db = self.gain_db
         try:
             self.device.set_gain_db(self.gain_db)
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             self.log_line(f"[red]gain change failed: {exc}[/red]")
         self.refresh_status()
 
     def action_antenna(self) -> None:
         channel = self.selected_channel()
-        freq = channel.center_hz if channel else (
-            self.monitor.freq_hz if self.monitor else None
-        )
+        freq = channel.center_hz if channel else (self.monitor.freq_hz if self.monitor else None)
         if freq is None:
             self.log_line("[yellow]No frequency selected.[/yellow]")
             return
         report = format_report(analyze(freq))
         self.push_screen(AntennaModal(report))
 
-    def on_rssi_update(self, message: "RadioTuiApp.RssiUpdate") -> None:
+    def on_rssi_update(self, message: RadioTuiApp.RssiUpdate) -> None:
         meter = self.query_one("#meter", Static)
         freq_line = (
-            Text(f"{self.monitor.freq_hz/1e6:.4f} MHz\n")
+            Text(f"{self.monitor.freq_hz / 1e6:.4f} MHz\n")
             if self.monitor is not None
             else Text("")
         )
         meter.update(freq_line + self.render_meter_bar(message.rssi_dbfs))
         self.refresh_status()
 
-    def on_monitor_error(self, message: "RadioTuiApp.MonitorError") -> None:
+    def on_monitor_error(self, message: RadioTuiApp.MonitorError) -> None:
         self.log_line(f"[red]{message.text}[/red]")
 
     def on_unmount(self) -> None:
@@ -400,16 +397,23 @@ class RadioTuiApp(App):
         if self.device is not None:
             self.device.close()
 
+    def action_band_fm_broadcast(self) -> None:
+        self.start_band("fm_broadcast")
 
-def _make_band_action(band_name: str):
-    def action(self: RadioTuiApp) -> None:
-        self.start_band(band_name)
+    def action_band_airband(self) -> None:
+        self.start_band("airband")
 
-    return action
+    def action_band_vhf_ham(self) -> None:
+        self.start_band("vhf_ham")
 
+    def action_band_vhf_marine(self) -> None:
+        self.start_band("vhf_marine")
 
-for _name in sorted(BANDS):
-    setattr(RadioTuiApp, f"action_band_{_name}", _make_band_action(_name))
+    def action_band_pmr446(self) -> None:
+        self.start_band("pmr446")
+
+    def action_band_uhf_ham(self) -> None:
+        self.start_band("uhf_ham")
 
 
 def run_tui(force_sim: bool = False) -> int:

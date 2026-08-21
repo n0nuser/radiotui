@@ -55,14 +55,14 @@ class ChannelMonitor:
             self._device.set_center_freq_hz(self._freq_hz)
             self._device.set_sample_rate_hz(self._settings.scanner.sample_rate_hz)
             self._device.set_gain_db(self._settings.scanner.gain_db)
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             if self.on_error:
                 self.on_error(str(exc))
             return
         if not self.muted:
             self.player.start()
         self._thread = threading.Thread(
-            target=self._run, name=f"monitor-{self._freq_hz/1e6:.3f}", daemon=True
+            target=self._run, name=f"monitor-{self._freq_hz / 1e6:.3f}", daemon=True
         )
         self._thread.start()
 
@@ -89,19 +89,19 @@ class ChannelMonitor:
             t0 = time.time()
             try:
                 iq = self._device.read_samples(block)
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 if self.on_error:
                     self.on_error(f"read failed: {exc}")
                 break
             self.rssi_dbfs = rssi_dbfs(iq)
             if self.on_rssi:
                 self.on_rssi(self.rssi_dbfs)
-            audio, out_rate = channel_audio(iq, fs, self._demod, rate)
+            audio = channel_audio(iq, fs, self._demod, rate)
             if len(audio):
                 pcm = audio_to_pcm16(audio)
                 if not self.muted:
                     self.player.write(pcm)
-                self.recorder.feed(pcm, out_rate)
+                self.recorder.feed(pcm, rate)
             elapsed = time.time() - t0
             budget = block / fs
             if elapsed < budget:

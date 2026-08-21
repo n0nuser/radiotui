@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -40,7 +41,7 @@ class SweepPlan:
     @classmethod
     def build(
         cls, start_hz: float, end_hz: float, sample_rate_hz: float, fft_size: int
-    ) -> "SweepPlan":
+    ) -> SweepPlan:
         if end_hz <= start_hz:
             raise ValueError("end must be greater than start")
         usable_bw = sample_rate_hz * (1.0 - 2 * 0.12)
@@ -94,8 +95,6 @@ def mask_dc(freqs: np.ndarray, power: np.ndarray, center_hz: float, width_hz: fl
 
 
 def frame_from_plan(plan: SweepPlan, hop_powers: list[tuple[float, np.ndarray]]) -> SpectrumFrame:
-    import time as _time
-
     keep_half = plan.sample_rate_hz * (0.5 - plan.edge_fraction)
     segments = []
     for center, psd in hop_powers:
@@ -105,4 +104,4 @@ def frame_from_plan(plan: SweepPlan, hop_powers: list[tuple[float, np.ndarray]])
         keep = (freqs >= lo) & (freqs <= hi)
         segments.append(_Segment(freqs[keep], psd[keep]))
     freqs, power = stitch_segments(segments)
-    return SpectrumFrame(freqs_hz=freqs, power_db=power, timestamp=_time.time())
+    return SpectrumFrame(freqs_hz=freqs, power_db=power, timestamp=time.time())

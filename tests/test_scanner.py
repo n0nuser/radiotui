@@ -1,21 +1,30 @@
-import numpy as np
+import argparse
+
 import pytest
 
 from radiotui.cli import parse_freq
-from radiotui.config import BANDS, band_by_name
-from radiotui.sdr.simulator import SimulatedDevice
+from radiotui.config import ScannerSettings, band_by_name
+from radiotui.dsp.detector import ChannelTracker, NoiseFloorEstimator, extract_peaks
 from radiotui.dsp.spectrum import SweepPlan, compute_psd, frame_from_plan
-from radiotui.dsp.detector import NoiseFloorEstimator, extract_peaks, ChannelTracker
-from radiotui.config import ScannerSettings
+from radiotui.sdr.simulator import SimulatedDevice
 
 
-def test_parse_freq_formats():
-    assert parse_freq("145.5mhz") == 145.5e6
-    assert parse_freq("145.5M") == 145.5e6
-    assert parse_freq("446006k") == pytest.approx(446.006e6)
-    assert parse_freq("145.5e6") == 145.5e6
-    assert parse_freq("145500000") == 145.5e6
-    with pytest.raises(Exception):
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("145.5mhz", 145.5e6),
+        ("145.5M", 145.5e6),
+        ("446006k", pytest.approx(446.006e6)),
+        ("145.5e6", 145.5e6),
+        ("145500000", 145.5e6),
+    ],
+)
+def test_parse_freq_formats(value, expected):
+    assert parse_freq(value) == expected
+
+
+def test_parse_freq_rejects_garbage():
+    with pytest.raises(argparse.ArgumentTypeError):
         parse_freq("not-a-freq")
 
 
@@ -39,12 +48,14 @@ def test_simulator_emits_expected_carriers():
             hops.append((center, compute_psd(iq, settings.fft_size)))
         frame = frame_from_plan(plan, hops)
         floor = est.update(frame)
-        peaks = extract_peaks(frame, floor, est.threshold_db, settings.min_snr_db, settings.peak_merge_gap_bins)
+        peaks = extract_peaks(
+            frame, floor, est.threshold_db, settings.min_snr_db, settings.peak_merge_gap_bins
+        )
         tracker.update(peaks)
 
     found = {ch.center_hz for ch in tracker.active_channels()}
     for expected in (89.0e6, 93.2e6, 97.5e6, 101.3e6):
-        assert any(abs(f - expected) < 60e3 for f in found), f"missing {expected/1e6} MHz"
+        assert any(abs(f - expected) < 60e3 for f in found), f"missing {expected / 1e6} MHz"
 
 
 def test_simulator_respects_sample_count():

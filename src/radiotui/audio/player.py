@@ -19,9 +19,49 @@ class AudioPlayer:
             if self._proc is not None and self._proc.poll() is None:
                 return True
             for argv in (
-                ["ffplay", "-loglevel", "quiet", "-nostats", "-nodisp", "-f", "s16le", "-ar", str(self.rate_hz), "-ch_layout", "mono", "-i", "-"],
-                ["ffplay", "-loglevel", "quiet", "-nostats", "-nodisp", "-f", "s16le", "-ar", str(self.rate_hz), "-ac", "1", "-i", "-"],
-                ["aplay", "-q", "-f", "S16_LE", "-r", str(self.rate_hz), "-c", "1", "-t", "raw", "-"],
+                [
+                    "ffplay",
+                    "-loglevel",
+                    "quiet",
+                    "-nostats",
+                    "-nodisp",
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    str(self.rate_hz),
+                    "-ch_layout",
+                    "mono",
+                    "-i",
+                    "-",
+                ],
+                [
+                    "ffplay",
+                    "-loglevel",
+                    "quiet",
+                    "-nostats",
+                    "-nodisp",
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    str(self.rate_hz),
+                    "-ac",
+                    "1",
+                    "-i",
+                    "-",
+                ],
+                [
+                    "aplay",
+                    "-q",
+                    "-f",
+                    "S16_LE",
+                    "-r",
+                    str(self.rate_hz),
+                    "-c",
+                    "1",
+                    "-t",
+                    "raw",
+                    "-",
+                ],
             ):
                 if shutil.which(argv[0]) is None:
                     continue
@@ -58,7 +98,7 @@ class AudioPlayer:
                 if proc.stdin is not None:
                     proc.stdin.close()
                 proc.wait(timeout=2.0)
-            except Exception:
+            except (OSError, subprocess.SubprocessError):
                 proc.kill()
 
     @property
