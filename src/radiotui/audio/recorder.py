@@ -12,6 +12,7 @@ import numpy as np
 from radiotui.config import AudioSettings
 
 MAX_CLIP_SECONDS = 120.0
+MIN_CLIP_SECONDS = 0.5
 
 
 def pcm_rms_dbfs(pcm: bytes) -> float:
@@ -102,6 +103,9 @@ class VoxRecorder:
         self._file.close()
         self._file = None
         self._path = None
+        if path is not None and frames / self._rate < MIN_CLIP_SECONDS:
+            path.unlink(missing_ok=True)
+            return
         if path is not None and frames > 0:
             info = ClipInfo(path=path, freq_hz=self._freq, seconds=frames / self._rate)
             self.clips.append(info)

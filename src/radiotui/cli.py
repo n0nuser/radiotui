@@ -211,8 +211,11 @@ def cmd_listen(args) -> None:
     )
     try:
         monitor.start()
+        t0 = time.time()
         while monitor.running:
             time.sleep(0.25)
+            if args.seconds and time.time() - t0 > args.seconds:
+                break
     except KeyboardInterrupt:
         pass
     finally:

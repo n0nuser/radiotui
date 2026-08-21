@@ -12,7 +12,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-sdr = ["pyrtlsdr>=0.2.92"]
+# Business decision: pyrtlsdr pinned to 0.2.92 because >= 0.3 binds
+# rtlsdr_set_dithering at import time, which distro librtlsdr builds
+# (e.g. Ubuntu 24.04) do not export. Revisit when we ship our own
+# librtlsdr build or drop distro packages.
+sdr = ["pyrtlsdr==0.2.92", "setuptools>=75,<81"]
 
 [project.scripts]
 radiotui = "radiotui.cli:main"

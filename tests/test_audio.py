@@ -9,7 +9,7 @@ from radiotui.audio.demod import (
     frequency_shift,
     rssi_dbfs,
 )
-from radiotui.audio.recorder import VoxRecorder, pcm_rms_dbfs
+from radiotui.audio.recorder import MIN_CLIP_SECONDS, VoxRecorder, pcm_rms_dbfs
 from radiotui.config import AudioSettings
 from radiotui.core.models import DemodMode
 
@@ -78,19 +78,35 @@ def test_rssi_and_pcm_conversion():
     assert len(pcm) == 6
 
 
+def feed_loud_seconds(recorder, seconds, rate=48_000):
+    samples = int(seconds * rate)
+    block = 4800
+    for _ in range(0, samples, block):
+        recorder.feed(audio_to_pcm16(np.full(block, 0.5)), rate)
+
+
 def test_vox_recorder_gates_on_level(tmp_path):
     settings = AudioSettings(recordings_dir=str(tmp_path), vox_threshold_dbfs=-30.0, vox_hang_ms=50)
     recorder = VoxRecorder(145.5e6, settings)
-    loud = audio_to_pcm16(np.full(480, 0.5))
     quiet = audio_to_pcm16(np.zeros(480))
     recorder.enabled = True
-    recorder.feed(loud, 48_000)
-    recorder.feed(loud, 48_000)
+    feed_loud_seconds(recorder, 1.0)
     recorder.feed(quiet, 48_000)
     clips = recorder.stop()
     assert len(clips) == 1
     assert clips[0].path.exists()
     assert clips[0].freq_hz == 145.5e6
+    assert clips[0].seconds >= MIN_CLIP_SECONDS
+
+
+def test_vox_recorder_discards_micro_clips(tmp_path):
+    settings = AudioSettings(recordings_dir=str(tmp_path), vox_threshold_dbfs=-30.0, vox_hang_ms=50)
+    recorder = VoxRecorder(145.5e6, settings)
+    recorder.enabled = True
+    recorder.feed(audio_to_pcm16(np.full(480, 0.5)), 48_000)
+    clips = recorder.stop()
+    assert clips == []
+    assert list(tmp_path.glob("*.wav")) == []
 
 
 def test_vox_recorder_disabled_writes_nothing(tmp_path):

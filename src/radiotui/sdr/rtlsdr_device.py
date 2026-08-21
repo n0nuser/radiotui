@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from radiotui.sdr.base import DeviceUnavailable, SdrDevice
 
 try:
-    from rtlsdr import RtlSdr
+    # Business decision: pinned pyrtlsdr 0.2.92 emits import-time
+    # deprecation/syntax warnings from its own internals; nothing actionable.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        warnings.simplefilter("ignore", SyntaxWarning)
+        from rtlsdr import RtlSdr
 
     _HAS_RTLSDR = True
-except Exception:
+except ImportError:
     RtlSdr = None
     _HAS_RTLSDR = False
 

@@ -93,6 +93,7 @@ class RadioTuiApp(App):
         self.gain_db: float | None = None
         self.muted = False
         self.clips_saved = 0
+        self.last_rssi: float | None = None
         self.row_keys: list[float] = []
         self.selected_hz: float | None = None
         self.last_state: ScanState | None = None
@@ -376,7 +377,7 @@ class RadioTuiApp(App):
         report = format_report(analyze(freq))
         self.push_screen(AntennaModal(report))
 
-    def on_rssi_update(self, message: RadioTuiApp.RssiUpdate) -> None:
+    def on_radio_tui_app_rssi_update(self, message: RadioTuiApp.RssiUpdate) -> None:
         meter = self.query_one("#meter", Static)
         freq_line = (
             Text(f"{self.monitor.freq_hz / 1e6:.4f} MHz\n")
@@ -386,7 +387,7 @@ class RadioTuiApp(App):
         meter.update(freq_line + self.render_meter_bar(message.rssi_dbfs))
         self.refresh_status()
 
-    def on_monitor_error(self, message: RadioTuiApp.MonitorError) -> None:
+    def on_radio_tui_app_monitor_error(self, message: RadioTuiApp.MonitorError) -> None:
         self.log_line(f"[red]{message.text}[/red]")
 
     def on_unmount(self) -> None:

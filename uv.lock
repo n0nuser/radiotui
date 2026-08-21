@@ -348,11 +348,11 @@ wheels = [
 
 [[package]]
 name = "pyrtlsdr"
-version = "0.5.0"
+version = "0.2.92"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d9/bf/60c6c077f52c91ab7df051b456096cb158c190dc5ea452cb6a2c9824b06f/pyrtlsdr-0.5.0.tar.gz", hash = "sha256:23d11ebd1b680b3e6a2a926b73de4ffe872cb1ffed8701f257cd1c46d1a840ac", size = 37969, upload-time = "2026-07-05T19:23:50.648Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2f/c4/c977ef62ba6880b1a8cf14cad141eb514216f5617eae3fc25fe830494a06/pyrtlsdr-0.2.92.tar.gz", hash = "sha256:3eac9faa8e0a230ded44c0479ef68c90d6e3c534701c355784b50199008a4759", size = 27141, upload-time = "2020-03-06T20:02:19.286Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/06/de/c1b4b02fa26a2b1fd0559f817be9833de0c77ed213139670b425e827066f/pyrtlsdr-0.5.0-py3-none-any.whl", hash = "sha256:0122da6e930d3f0593914864cf580923e3132d90aeba1f73a651a571c227f5d8", size = 31649, upload-time = "2026-07-05T19:23:49.653Z" },
+    { url = "https://files.pythonhosted.org/packages/db/88/6855834021364b38885e9aed0f231fc10d5f419bc3446e1d2bf39b9405d0/pyrtlsdr-0.2.92-py2.py3-none-any.whl", hash = "sha256:8c72e897108ea061e63daf4b741da5abb8b005d0fc53fc22edafe65b10f2c089", size = 25384, upload-time = "2020-03-06T20:02:17.743Z" },
 ]
 
 [[package]]
@@ -387,6 +387,7 @@ dependencies = [
 [package.optional-dependencies]
 sdr = [
     { name = "pyrtlsdr" },
+    { name = "setuptools" },
 ]
 
 [package.dev-dependencies]
@@ -398,7 +399,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
-    { name = "pyrtlsdr", marker = "extra == 'sdr'", specifier = ">=0.2.92" },
+    { name = "pyrtlsdr", marker = "extra == 'sdr'", specifier = "==0.2.92" },
+    { name = "setuptools", marker = "extra == 'sdr'", specifier = ">=75,<81" },
     { name = "textual", specifier = ">=0.60" },
 ]
 provides-extras = ["sdr"]
@@ -445,6 +447,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/aa/28/0c6dd865859c6d17bc8ccc34cb72b0e02d6c7eb25e8a1e22b5bea681e2c0/ruff-0.16.4-py3-none-win32.whl", hash = "sha256:312769988007aaeb8e189b443ccdd03c0e6374489e053467be6d96518ebff76e", size = 10021687, upload-time = "2026-08-20T17:43:52.281Z" },
     { url = "https://files.pythonhosted.org/packages/a3/03/e724450f621698117f9aa6dd241c94d0274ae96781378dc86745ae29f0e7/ruff-0.16.4-py3-none-win_amd64.whl", hash = "sha256:05d9d27a18c4bcbefada602480ec9e01e0bc949d432e0ced5df77edac195919c", size = 10567657, upload-time = "2026-08-20T17:43:54.78Z" },
     { url = "https://files.pythonhosted.org/packages/0e/fe/da8b9e1347696bb22120b77280ec5ce25d500ca5cb39d5ad6e5c18de19c1/ruff-0.16.4-py3-none-win_arm64.whl", hash = "sha256:a3a61621c9b6f6a89573e938a080e648f1695baa3f58570a3a707bc51ff65a21", size = 10451579, upload-time = "2026-08-20T17:43:57.135Z" },
+]
+
+[[package]]
+name = "setuptools"
+version = "80.10.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/76/95/faf61eb8363f26aa7e1d762267a8d602a1b26d4f3a1e758e92cb3cb8b054/setuptools-80.10.2.tar.gz", hash = "sha256:8b0e9d10c784bf7d262c4e5ec5d4ec94127ce206e8738f29a437945fbc219b70", size = 1200343, upload-time = "2026-01-25T22:38:17.252Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/b8/f1f62a5e3c0ad2ff1d189590bfa4c46b4f3b6e49cef6f26c6ee4e575394d/setuptools-80.10.2-py3-none-any.whl", hash = "sha256:95b30ddfb717250edb492926c92b5221f7ef3fbcc2b07579bcd4a27da21d0173", size = 1064234, upload-time = "2026-01-25T22:38:15.216Z" },
 ]
 
 [[package]]
