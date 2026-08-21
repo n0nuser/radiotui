@@ -60,6 +60,15 @@ class Peak:
 
 
 @dataclass(frozen=True)
+class HoldRequest:
+    """Autonomous-mode request to pause sweeping and monitor a live channel."""
+
+    freq_hz: float
+    demod: DemodMode
+    snr_db: float
+
+
+@dataclass(frozen=True)
 class ScanState:
     frame: SpectrumFrame
     channels: list[Channel]
@@ -68,3 +77,4 @@ class ScanState:
     sweeps_done: int
     elapsed: float
     error: str | None = None
+    hold_request: HoldRequest | None = None

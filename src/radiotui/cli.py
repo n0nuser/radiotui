@@ -14,7 +14,16 @@ from rich.table import Table
 from rich.text import Text
 
 from radiotui.antenna.advisor import analyze, format_report
-from radiotui.config import BANDS, Band, Settings, band_by_name
+from radiotui.config import (
+    BANDS,
+    Band,
+    Settings,
+    band_by_name,
+    band_needs_hf,
+    effective_sample_rate,
+    enable_hf,
+    freq_needs_hf,
+)
 from radiotui.core.models import DemodMode
 from radiotui.dsp.spectrum import SweepPlan
 from radiotui.scanner.monitor import ChannelMonitor
@@ -71,23 +80,71 @@ def open_device_or_exit(force_sim: bool) -> SdrDevice:
     return opened.device
 
 
+def add_hw_options(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    parser.add_argument(
+        "--bias-tee", action="store_true", help="power an LNA via bias tee (~4.5 V)"
+    )
+    parser.add_argument("--ppm", type=int, default=0, metavar="N", help="crystal correction in ppm")
+    parser.add_argument(
+        "--offset-tune", action="store_true", help="tune LO offset by fs/4 (avoids DC spike)"
+    )
+    return parser
+
+
+def announce_hf(device: SdrDevice) -> None:
+    if device.is_real:
+        ok = device.set_hf_mode(True)
+        state = "[green]ON[/green]" if ok else "[red]failed[/red]"
+        console.print(f"HF direct sampling (Q-branch): {state}")
+    else:
+        console.print("HF band: simulator mode")
+
+
+def apply_hw_options(device: SdrDevice, args) -> None:
+    sim_note = " (simulator: ignored)" if not device.is_real else ""
+    ppm = getattr(args, "ppm", 0) or 0
+    if ppm:
+        ok = device.set_freq_correction(ppm)
+        state = "[green]applied[/green]" if ok else "[red]unsupported by device[/red]"
+        console.print(f"PPM correction {ppm:+d}: {state}{sim_note}")
+    if getattr(args, "offset_tune", False):
+        ok = device.set_offset_tuning(True)
+        state = "[green]on[/green]" if ok else "[red]unsupported[/red]"
+        console.print(f"Offset tuning: {state}{sim_note}")
+    if getattr(args, "bias_tee", False):
+        ok = device.set_bias_tee(True)
+        state = (
+            "[green]ON - ~4.5 V on antenna port[/green]"
+            if ok
+            else "[red]not supported by this librtlsdr build[/red]"
+        )
+        console.print(f"Bias tee: {state}{sim_note}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="radiotui",
         description="Autonomous RTL-SDR spectrum scanner with terminal UI.",
     )
     parser.add_argument("--sim", action="store_true", help="force the simulated device")
+    add_hw_options(parser)
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("devices", help="list detected SDR hardware")
 
     p_scan = sub.add_parser("scan", help="headless sweep with live table")
+    add_hw_options(p_scan)
     p_scan.add_argument("--band", choices=sorted(BANDS), help="preset band")
     p_scan.add_argument("--start", type=float, metavar="MHZ")
     p_scan.add_argument("--end", type=float, metavar="MHZ")
     p_scan.add_argument("--demod", choices=[d.value for d in DemodMode], default=None)
     p_scan.add_argument("--gain", type=float, default=None)
     p_scan.add_argument("--seconds", type=float, default=None, help="stop after N seconds")
+    p_scan.add_argument(
+        "--autonomous",
+        action="store_true",
+        help="auto-hold on live channels: VOX-record, release on silence",
+    )
 
     p_listen = sub.add_parser("listen", help="tune a frequency and play audio")
     p_listen.add_argument("freq", type=parse_freq, metavar="FREQ")
@@ -95,12 +152,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_listen.add_argument("--gain", type=float, default=None)
     p_listen.add_argument("--record", action="store_true", help="also VOX-record clips")
     p_listen.add_argument("--seconds", type=float, default=None)
+    add_hw_options(p_listen)
 
     p_record = sub.add_parser("record", help="VOX-record transmissions to WAV files")
     p_record.add_argument("freq", type=parse_freq, metavar="FREQ")
     p_record.add_argument("--demod", choices=[d.value for d in DemodMode], default=None)
     p_record.add_argument("--gain", type=float, default=None)
     p_record.add_argument("--seconds", type=float, default=None)
+    add_hw_options(p_record)
 
     p_ant = sub.add_parser("antenna", help="antenna advisor report")
     p_ant.add_argument("freq", type=parse_freq, metavar="FREQ")
@@ -109,8 +168,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_tuner.add_argument("freq", type=parse_freq, metavar="FREQ")
     p_tuner.add_argument("--demod", choices=[d.value for d in DemodMode], default=None)
     p_tuner.add_argument("--gain", type=float, default=None)
+    add_hw_options(p_tuner)
 
-    sub.add_parser("tui", help="launch the terminal UI (default)")
+    p_tui = sub.add_parser("tui", help="launch the terminal UI (default)")
+    add_hw_options(p_tui)
 
     return parser
 
@@ -129,11 +190,18 @@ def cmd_scan(args) -> None:
     band = resolve_band(args)
     settings = Settings()
     settings.scanner.gain_db = args.gain
+    settings.scanner.autonomous = args.autonomous
     device = open_device_or_exit(args.sim)
+    apply_hw_options(device, args)
+    if enable_hf(band_needs_hf(band), settings.scanner):
+        announce_hf(device)
     out: queue.Queue = queue.Queue(maxsize=4)
 
     plan = SweepPlan.build(
-        band.start_hz, band.end_hz, settings.scanner.sample_rate_hz, settings.scanner.fft_size
+        band.start_hz,
+        band.end_hz,
+        effective_sample_rate(settings.scanner),
+        settings.scanner.fft_size,
     )
     sweeper = Sweeper(device, plan, settings.scanner, out)
     sweeper.start()
@@ -155,6 +223,11 @@ def cmd_scan(args) -> None:
                     console.print(f"[red]Device error: {state.error}[/red]")
                     break
                 live.update(render_scan(state))
+                if state.hold_request is not None:
+                    budget = None
+                    if args.seconds:
+                        budget = max(1.0, args.seconds - (time.time() - t0))
+                    _headless_auto_hold(device, sweeper, settings, state.hold_request, budget)
                 if args.seconds and time.time() - t0 > args.seconds:
                     break
     except KeyboardInterrupt:
@@ -163,6 +236,36 @@ def cmd_scan(args) -> None:
         sweeper.stop()
         device.close()
     console.print("[dim]Scan stopped.[/dim]")
+
+
+def _headless_auto_hold(device, sweeper, settings, req, budget_s: float | None = None) -> None:
+    freq_mhz = req.freq_hz / 1e6
+    console.print(
+        f"[magenta]AUTO[/magenta] holding {freq_mhz:.4f} MHz "
+        f"(SNR {req.snr_db:.0f} dB), VOX recording"
+    )
+    monitor = ChannelMonitor(device, req.freq_hz, req.demod, settings, muted=True)
+    monitor.recorder.enabled = True
+    monitor.recorder.on_clip_end = lambda clip: console.print(
+        f"[green]clip saved[/green] {clip.path.name} ({clip.seconds:.1f}s)"
+    )
+    monitor.start()
+    t_hold = time.time()
+    while monitor.running:
+        time.sleep(0.2)
+        silent = monitor.recorder.seconds_since_voice() >= settings.scanner.hold_release_s
+        expired = time.time() - t_hold >= settings.scanner.max_hold_s
+        out_of_time = budget_s is not None and time.time() - t_hold >= budget_s
+        if silent or expired or out_of_time:
+            break
+    clips = monitor.recorder.stop()
+    monitor.stop()
+    if not clips:
+        console.print("[dim]AUTO hold ended without transmissions.[/dim]")
+    else:
+        console.print(f"[dim]AUTO released after {len(clips)} clip(s).[/dim]")
+    sweeper.cooldown_channel(req.freq_hz)
+    sweeper.release_hold()
 
 
 def render_scan(state) -> Table:
@@ -194,6 +297,9 @@ def run_monitor(args, freq: float):
     settings.scanner.gain_db = args.gain
     demod = DemodMode(args.demod) if args.demod else guess_demod(freq)
     device = open_device_or_exit(args.sim)
+    apply_hw_options(device, args)
+    if enable_hf(freq_needs_hf(freq), settings.scanner):
+        announce_hf(device)
     monitor = ChannelMonitor(device, freq, demod, settings, muted=False)
     monitor.recorder.on_clip_end = lambda clip: console.print(
         f"[green]clip saved[/green] {clip.path.name} ({clip.seconds:.1f}s)"
@@ -318,7 +424,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command or args.command == "tui":
-        return run_tui(force_sim=args.sim)
+        return run_tui(
+            force_sim=args.sim,
+            bias_tee=getattr(args, "bias_tee", False),
+            ppm=getattr(args, "ppm", 0) or 0,
+            offset_tune=getattr(args, "offset_tune", False),
+        )
     COMMANDS[args.command](args)
     return 0
 

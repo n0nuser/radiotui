@@ -38,6 +38,9 @@ DEFAULT_ENVIRONMENT: list[SimCarrier] = [
     SimCarrier(446.00625e6, -27.0, "nfm", duty_cycle=0.35, burst_period_s=6.0),
     SimCarrier(446.03125e6, -33.0, "nfm", duty_cycle=0.25, burst_period_s=10.0),
     SimCarrier(446.05625e6, -40.0, "nfm", duty_cycle=0.15, burst_period_s=13.0),
+    SimCarrier(6.055e6, -18.0, "am", duty_cycle=1.0),
+    SimCarrier(7.074e6, -30.0, "nfm", duty_cycle=0.20, burst_period_s=9.0),
+    SimCarrier(3.7e6, -28.0, "nfm", duty_cycle=0.25, burst_period_s=11.0),
 ]
 
 

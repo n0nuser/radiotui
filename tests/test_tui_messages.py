@@ -62,3 +62,18 @@ async def test_live_monitor_thread_updates_meter() -> None:
         app.stop_monitor()
         assert rssi_seen is not None
         assert "RSSI" in meter
+
+
+async def test_autonomous_toggle_flips_setting_and_status() -> None:
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        assert not app.settings.scanner.autonomous
+        await pilot.press("o")
+        await pilot.pause(0.2)
+        assert app.settings.scanner.autonomous
+        meter = str(app.query_one("#meter", Static).render())
+        assert "AUTO" in meter
+        await pilot.press("o")
+        await pilot.pause(0.2)
+        assert not app.settings.scanner.autonomous

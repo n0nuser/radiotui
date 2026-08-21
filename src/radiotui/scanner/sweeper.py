@@ -9,10 +9,14 @@ import time
 import numpy as np
 
 from radiotui.config import ScannerSettings
-from radiotui.core.models import ScanState, SpectrumFrame
+from radiotui.core.models import HoldRequest, ScanState, SpectrumFrame
 from radiotui.dsp.detector import ChannelTracker, NoiseFloorEstimator, extract_peaks
 from radiotui.dsp.spectrum import SweepPlan, compute_psd, frame_from_plan
 from radiotui.sdr.base import SdrDevice
+
+
+def channel_key(freq_hz: float) -> float:
+    return round(freq_hz / 5_000.0) * 5_000.0
 
 
 class Sweeper:
@@ -31,6 +35,10 @@ class Sweeper:
         self._thread: threading.Thread | None = None
         self._floor = NoiseFloorEstimator(settings)
         self._tracker = ChannelTracker(settings)
+        self._release_event = threading.Event()
+        self._cooldown_until: dict[float, float] = {}
+        self.hold_request: HoldRequest | None = None
+        self.holding = False
         self.sweeps_done = 0
 
     @property
@@ -50,9 +58,29 @@ class Sweeper:
 
     def stop(self) -> None:
         self._stop.set()
+        self._release_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
+
+    def release_hold(self) -> None:
+        self._release_event.set()
+
+    def holding_active(self) -> bool:
+        return self.holding
+
+    def cooldown_channel(self, freq_hz: float) -> None:
+        self._cooldown_until[channel_key(freq_hz)] = time.time() + self._settings.channel_cooldown_s
+
+    def _auto_hold_candidate(self, active: list) -> HoldRequest | None:
+        now = time.time()
+        for ch in sorted(active, key=lambda c: c.snr_db, reverse=True):
+            if ch.snr_db < self._settings.auto_hold_min_snr_db:
+                break
+            if now < self._cooldown_until.get(channel_key(ch.center_hz), 0.0):
+                continue
+            return HoldRequest(freq_hz=ch.center_hz, demod=ch.demod, snr_db=ch.snr_db)
+        return None
 
     def _run(self) -> None:
         samples_per_hop = max(
@@ -88,6 +116,12 @@ class Sweeper:
             )
             active = self._tracker.update(peaks)
             self.sweeps_done += 1
+            hold = None
+            if self._settings.autonomous and self.hold_request is None:
+                hold = self._auto_hold_candidate(active)
+                if hold is not None:
+                    self.hold_request = hold
+                    self.holding = True
             state = ScanState(
                 frame=frame,
                 channels=active,
@@ -95,11 +129,17 @@ class Sweeper:
                 threshold_db=self._floor.threshold_db,
                 sweeps_done=self.sweeps_done,
                 elapsed=time.time() - t0,
+                hold_request=hold,
             )
             try:
                 self._queue.put_nowait(state)
             except queue.Full:
                 pass
+            if hold is not None and not self._stop.is_set():
+                self._release_event.wait()
+                self._release_event.clear()
+                self.hold_request = None
+                self.holding = False
 
 
 def _error_state(message: str) -> ScanState:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import wave
 from dataclasses import dataclass
 from datetime import datetime
@@ -42,6 +43,7 @@ class VoxRecorder:
         self.clips: list[ClipInfo] = []
         self.on_clip_end = None
         self.enabled = False
+        self.last_voice_ts: float | None = None
 
     @property
     def directory(self) -> Path:
@@ -51,14 +53,22 @@ class VoxRecorder:
     def recording(self) -> bool:
         return self._file is not None
 
+    def seconds_since_voice(self, now: float | None = None) -> float:
+        now = time.time() if now is None else now
+        if self.last_voice_ts is None:
+            return float("inf")
+        return now - self.last_voice_ts
+
     def feed(self, pcm: bytes, rate_hz: int | None = None) -> None:
-        if not self.enabled:
-            return
         if rate_hz is not None:
             self._rate = rate_hz
         level_dbfs = pcm_rms_dbfs(pcm)
         block_ms = 1000.0 * (len(pcm) / 2) / self._rate
         voiced = level_dbfs > self._settings.vox_threshold_dbfs
+        if voiced:
+            self.last_voice_ts = time.time()
+        if not self.enabled:
+            return
         if voiced:
             if self._file is None:
                 self._open_clip()

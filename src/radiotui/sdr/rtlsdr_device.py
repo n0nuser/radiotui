@@ -18,6 +18,7 @@ except Exception:
 class RtlSdrDevice(SdrDevice):
     name = "rtl-sdr"
     is_real = True
+    _READ_CHUNK = 32_768
 
     def __init__(self, device_index: int = 0) -> None:
         if not _HAS_RTLSDR:
@@ -61,10 +62,54 @@ class RtlSdrDevice(SdrDevice):
         else:
             self._sdr.gain = float(gain_db)
 
+    def set_hf_mode(self, enabled: bool) -> bool:
+        assert self._sdr is not None
+        try:
+            self._sdr.set_direct_sampling(2 if enabled else 0)
+            return True
+        except (AttributeError, OSError, RuntimeError, ValueError):
+            return False
+
     def read_samples(self, count: int) -> np.ndarray:
         assert self._sdr is not None
-        raw = self._sdr.read_samples(count)
-        return np.asarray(raw, dtype=np.complex128)
+        parts: list[np.ndarray] = []
+        remaining = count
+        while remaining > 0:
+            n = min(remaining, self._READ_CHUNK)
+            n -= n % 256
+            if n == 0:
+                n = 256
+            raw = self._sdr.read_samples(n)
+            parts.append(np.asarray(raw, dtype=np.complex128))
+            remaining -= n
+        result = parts[0] if len(parts) == 1 else np.concatenate(parts)
+        return result[:count]
+
+    def set_bias_tee(self, enabled: bool) -> bool:
+        assert self._sdr is not None
+        try:
+            self._sdr.set_bias_tee(bool(enabled))
+            return True
+        except (AttributeError, OSError, RuntimeError, ValueError):
+            return False
+
+    def set_freq_correction(self, ppm: int) -> bool:
+        assert self._sdr is not None
+        try:
+            self._sdr.set_freq_correction(int(ppm))
+            return True
+        except (AttributeError, OSError, RuntimeError, ValueError):
+            return False
+
+    def set_offset_tuning(self, enabled: bool) -> bool:
+        assert self._sdr is not None
+        try:
+            from rtlsdr.librtlsdr import librtlsdr
+
+            result = librtlsdr.rtlsdr_set_offset_tuning(self._sdr.dev_p, 1 if enabled else 0)
+            return result == 0
+        except (AttributeError, OSError, RuntimeError, ValueError):
+            return False
 
 
 def detect_real_devices(max_probe: int = 4) -> list[str]:

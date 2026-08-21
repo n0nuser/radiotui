@@ -1,5 +1,9 @@
 # radiotui
 
+<p align="center">
+  <img src="docs/tui.svg" alt="radiotui terminal UI sweeping FM broadcast on a real RTL-SDR v3" width="100%">
+</p>
+
 Autonomous spectrum scanner for the RTL-SDR v3 with a terminal UI. It sweeps
 bands on its own, estimates the noise floor, flags frequencies that show
 "life", lets you listen and record them, and helps you place your antenna.
@@ -15,6 +19,14 @@ bands on its own, estimates the noise floor, flags frequencies that show
   table, signal meter, keyboard controls.
 - **Listen & record** — NFM / WFM / AM demodulation in numpy, playback through
   `ffplay`/`aplay`, VOX-gated WAV recording of transmissions.
+- **Autonomous scan-and-hold** (`o` in the TUI, `--autonomous` headless) —
+  when a channel crosses the activation gate the scanner pauses its sweep,
+  VOX-records transmissions on that frequency and releases back to sweeping
+  after a few seconds of silence, with per-channel cooldown.
+- **Hardware controls** — bias tee (~4.5 V for LNAs / active antennas),
+  PPM crystal correction and optional LO-offset tuning.
+- **HF coverage** — bands below 24 MHz automatically switch the v3 into
+  direct-sampling Q-branch mode (500 kHz - 28.8 MHz).
 - **Antenna advisor** — wavelength math (quarter-wave, dipole legs in cm),
   band-specific antenna/orientation recommendations, and a live tuner mode
   with a big signal bar for physically optimizing your setup.
@@ -79,7 +91,7 @@ echo 'export LD_LIBRARY_PATH="$HOME/.local/lib/rtlsdr-shim${LD_LIBRARY_PATH:+:$L
 
 Then verify with `radiotui devices`.
 
-### Measured performance (RTL-SDR v3, R820T)
+### Measured performance (RTL-SDR v3, R820T, indoor dipole)
 
 | Metric | Value |
 | --- | --- |
@@ -91,19 +103,52 @@ Then verify with `radiotui devices`.
 | Audio playback | `aplay` fallback works without ffmpeg |
 | Recordings | WAV clips land in `recordings/` (48 kHz mono PCM16) |
 
+### HF direct sampling — notes and gotchas
+
+- Switching into a band below 24 MHz enables `set_direct_sampling(2)`
+  (Q-branch) automatically; switching back to VHF/UHF disables it.
+- **Sample rate is forced to 28.8 MHz / 115 ≈ 250.43 kS/s in HF mode.**
+  Sync reads at ~1 MS/s in direct-sampling mode overflow the USB ring buffer
+  (`LIBUSB_ERROR_OVERFLOW`) on this host. 250 kS/s is rock solid and still
+  far wider than any HF channel.
+- **Sync reads are aligned to multiples of 256 samples** inside
+  `RtlSdrDevice.read_samples`: the RTL2832 bulk endpoint overruns unless
+  transfer lengths are multiples of 512 bytes.
+- Validated live: shortwave broadcast carriers at 9.815 / 11.765 / 11.910 MHz
+  detected with the stock indoor dipole; AM listen works.
+
+### Crystal PPM calibration
+
+`rtl_test -p` is noisy on this host because of USB sample losses
+(cumulative −70 ppm, per-window values −106…+320). FM carrier centroids gave
+station-dependent results (+6…−22 ppm) because broadcast modulation skews the
+centroid. Practical guidance: start with the cumulative `rtl_test -p` value,
+then refine against a known narrowband reference (DAB or GSM downlink) if you
+need sub-kHz accuracy. `--offset-tune` is exposed but **reports "unsupported"
+on Ubuntu's librtlsdr2 2.0.1** even via raw symbol calls — the automatic DC
+masking makes it unnecessary anyway.
+
 ## Usage
 
 ```bash
 radiotui                       # launch the TUI (auto-detects device)
 radiotui scan                  # headless sweep, prints live table
-radiotui scan --band airband   # preset bands: fm_broadcast, airband,
-                               # vhf_ham, uhf_ham, pmr446
+radiotui scan --band airband   # presets: hf_broadcast, hf_ham_40m, hf_ham_80m,
+                               # fm_broadcast, airband, vhf_ham, vhf_marine,
+                               # pmr446, uhf_ham
+radiotui scan --autonomous     # sweep + auto-hold + VOX record live channels
 radiotui listen 145.500e6      # tune + demodulate + play
+radiotui listen 96.9e6 --bias-tee   # power an LNA while listening
 radiotui record 446.00625e6    # VOX-record transmissions to WAV
+radiotui scan --ppm -70        # correct crystal error (see measurement below)
 radiotui antenna 145.500e6     # antenna advisor report
 radiotui tuner                 # live signal bar to optimize the antenna
 radiotui devices               # list detected SDR hardware
 ```
+
+Hardware flags `--bias-tee`, `--ppm N` and `--offset-tune` work on every
+command (scan / listen / record / tuner / tui). Bands starting below 24 MHz
+switch into HF direct sampling automatically.
 
 ### TUI keys
 
@@ -111,11 +156,14 @@ radiotui devices               # list detected SDR hardware
 | --- | --- |
 | `s` | start / stop sweeping |
 | `enter` | listen to selected channel |
+| `l` | stop listening |
 | `m` | mute / unmute |
 | `r` | record selected channel |
 | `n` / `p` | jump to next / previous active channel |
 | `+` / `-` | gain up / down |
 | `a` | antenna advisor for selected channel |
+| `o` | autonomous scan-and-hold on / off |
+| number keys | jump between band presets (1-9) |
 | `q` | quit |
 
 ## Layout

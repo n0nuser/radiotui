@@ -8,7 +8,7 @@ import time
 from radiotui.audio.demod import audio_to_pcm16, channel_audio, rssi_dbfs
 from radiotui.audio.player import AudioPlayer
 from radiotui.audio.recorder import VoxRecorder
-from radiotui.config import Settings
+from radiotui.config import Settings, effective_sample_rate
 from radiotui.core.models import DemodMode
 from radiotui.sdr.base import SdrDevice
 
@@ -53,7 +53,7 @@ class ChannelMonitor:
         self._stop.clear()
         try:
             self._device.set_center_freq_hz(self._freq_hz)
-            self._device.set_sample_rate_hz(self._settings.scanner.sample_rate_hz)
+            self._device.set_sample_rate_hz(effective_sample_rate(self._settings.scanner))
             self._device.set_gain_db(self._settings.scanner.gain_db)
         except (OSError, RuntimeError, ValueError) as exc:
             if self.on_error:
@@ -83,7 +83,7 @@ class ChannelMonitor:
 
     def _run(self) -> None:
         block = self._settings.audio.block_size
-        fs = self._settings.scanner.sample_rate_hz
+        fs = effective_sample_rate(self._settings.scanner)
         rate = self._settings.audio.output_rate_hz
         while not self._stop.is_set():
             t0 = time.time()

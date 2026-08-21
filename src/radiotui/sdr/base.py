@@ -37,6 +37,20 @@ class SdrDevice(ABC):
     @abstractmethod
     def read_samples(self, count: int) -> np.ndarray: ...
 
+    def set_bias_tee(self, enabled: bool) -> bool:
+        """Enable ~4.5 V bias voltage on the antenna port. No-op by default."""
+        return False
+
+    def set_freq_correction(self, ppm: int) -> bool:
+        return False
+
+    def set_offset_tuning(self, enabled: bool) -> bool:
+        return False
+
+    def set_hf_mode(self, enabled: bool) -> bool:
+        """Direct-sampling Q-branch for HF reception. No-op by default."""
+        return False
+
     def __enter__(self) -> SdrDevice:
         self.open()
         return self

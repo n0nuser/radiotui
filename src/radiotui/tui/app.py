@@ -15,7 +15,13 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, RichLog, Static
 
 from radiotui.antenna.advisor import analyze, format_report
-from radiotui.config import BANDS, Settings
+from radiotui.config import (
+    BANDS,
+    Settings,
+    band_needs_hf,
+    effective_sample_rate,
+    enable_hf,
+)
 from radiotui.core.models import Channel, DemodMode, ScanState
 from radiotui.dsp.spectrum import SweepPlan
 from radiotui.scanner.monitor import ChannelMonitor
@@ -64,6 +70,7 @@ class RadioTuiApp(App):
         Binding("plus", "gain_up", "Gain+", key_display="+"),
         Binding("minus", "gain_down", "Gain-", key_display="-"),
         Binding("a", "antenna", "Antenna"),
+        Binding("o", "toggle_autonomous", "Auto"),
         Binding("q", "quit", "Quit", priority=True),
     ]
     for i, name in enumerate(sorted(BANDS), start=1):
@@ -79,9 +86,27 @@ class RadioTuiApp(App):
             super().__init__()
             self.text = text
 
-    def __init__(self, force_sim: bool = False) -> None:
+    class ClipSaved(Message):
+        def __init__(self, clip) -> None:
+            super().__init__()
+            self.clip = clip
+
+    def __init__(
+        self,
+        force_sim: bool = False,
+        bias_tee: bool = False,
+        ppm: int = 0,
+        offset_tune: bool = False,
+    ) -> None:
         super().__init__()
         self._force_sim = force_sim
+        self._bias_tee_requested = bias_tee
+        self._ppm_requested = ppm
+        self._offset_tune_requested = offset_tune
+        self.bias_tee_on = False
+        self.hf_active = False
+        self.auto_hold_freq: float | None = None
+        self._auto_hold_started_at = 0.0
         self.settings = Settings()
         self.device = None
         self.is_real = False
@@ -131,6 +156,28 @@ class RadioTuiApp(App):
         except (OSError, RuntimeError) as exc:
             self.log_line(f"[red]Failed to open any device: {exc}[/red]")
             return
+        if self.device.is_real:
+            if self._ppm_requested:
+                ok = self.device.set_freq_correction(self._ppm_requested)
+                self.log_line(
+                    f"PPM correction {self._ppm_requested:+d}: "
+                    + ("[green]applied[/green]" if ok else "[red]unsupported[/red]")
+                )
+            if self._offset_tune_requested:
+                ok = self.device.set_offset_tuning(True)
+                self.log_line(
+                    "Offset tuning: [green]on[/green]"
+                    if ok
+                    else "Offset tuning: [red]unsupported[/red]"
+                )
+            if self._bias_tee_requested:
+                ok = self.device.set_bias_tee(True)
+                self.bias_tee_on = ok
+                self.log_line(
+                    "Bias tee: [green]ON - ~4.5 V on antenna port[/green]"
+                    if ok
+                    else "Bias tee: [red]not supported by this librtlsdr build[/red]"
+                )
         mode = "REAL" if self.is_real else "SIMULATED"
         self.log_line(
             f"Device: [bold]{self.device.name}[/bold] ({mode})."
@@ -147,15 +194,26 @@ class RadioTuiApp(App):
             self.sweeper.stop()
         waterfall = self.query_one("#waterfall", Waterfall)
         waterfall.rows.clear()
+        hf = enable_hf(band_needs_hf(band), self.settings.scanner)
+        self.hf_active = False
+        if self.device.is_real:
+            ok = self.device.set_hf_mode(hf)
+            if hf:
+                self.hf_active = ok
+                state = "[green]ON[/green]" if ok else "[red]failed[/red]"
+                self.log_line(f"HF direct sampling (Q-branch): {state}")
         self.plan = SweepPlan.build(
             band.start_hz,
             band.end_hz,
-            self.settings.scanner.sample_rate_hz,
+            effective_sample_rate(self.settings.scanner),
             self.settings.scanner.fft_size,
         )
         self.sweeper = Sweeper(self.device, self.plan, self.settings.scanner, self.queue)
         self.sweeper.start()
-        self.log_line(f"Sweeping [bold]{band.label}[/bold] ({len(self.plan.hop_centers_hz)} hops)")
+        self.log_line(
+            f"Sweeping [bold]{band.label}[/bold] ({len(self.plan.hop_centers_hz)} hops)"
+            + (f" @ {effective_sample_rate(self.settings.scanner) / 1e3:.0f} kS/s" if hf else "")
+        )
 
     def log_line(self, text: str) -> None:
         self.query_one("#log", RichLog).write(text)
@@ -188,6 +246,10 @@ class RadioTuiApp(App):
         )
         self.refresh_table(latest.channels)
         self.refresh_status()
+        if latest.hold_request is not None:
+            self._engage_auto_hold(latest.hold_request)
+        elif self.auto_hold_freq is not None and self.monitor is not None:
+            self._auto_release_check()
 
     def refresh_table(self, channels: list[Channel]) -> None:
         table = self.query_one("#channels", DataTable)
@@ -239,6 +301,17 @@ class RadioTuiApp(App):
             parts.append(f"floor {self.last_state.noise_floor_db:.1f} dB")
         gain_label = f"{self.gain_db:.1f} dB" if self.gain_db is not None else "auto"
         parts.append(f"gain {gain_label}")
+        if self.hf_active:
+            parts.append("[cyan]HF[/cyan]")
+        if self.bias_tee_on:
+            parts.append("[yellow]bias ⚡[/yellow]")
+        if self.settings.scanner.autonomous:
+            hold = (
+                f" [magenta]HOLD {self.auto_hold_freq / 1e6:.3f}[/magenta]"
+                if self.auto_hold_freq is not None
+                else ""
+            )
+            parts.append(f"[magenta]AUTO{hold}[/magenta]")
         if self.monitor is not None and self.monitor.running:
             rec = " ●REC" if self.monitor.recorder.recording else ""
             mute = " 🔇" if self.muted else ""
@@ -289,11 +362,68 @@ class RadioTuiApp(App):
             return
         self.start_monitor(channel.center_hz, channel.demod, muted=False, enable_recorder=False)
 
+    def _engage_auto_hold(self, req) -> None:
+        if not self.settings.scanner.autonomous or self.monitor is not None:
+            return
+        if self.sweeper is None or not self.sweeper.running:
+            return
+        self.auto_hold_freq = req.freq_hz
+        self._auto_hold_started_at = time.time()
+        self.start_monitor(
+            req.freq_hz, req.demod, muted=True, enable_recorder=True, pause_sweep=False
+        )
+        self.log_line(
+            f"[magenta]AUTO[/magenta] holding {req.freq_hz / 1e6:.4f} MHz "
+            f"(SNR {req.snr_db:.0f} dB), VOX recording"
+        )
+
+    def _auto_release_check(self) -> None:
+        assert self.monitor is not None and self.auto_hold_freq is not None
+        silent_for = self.monitor.recorder.seconds_since_voice()
+        held_for = time.time() - self._auto_hold_started_at
+        if (
+            silent_for >= self.settings.scanner.hold_release_s
+            or held_for >= self.settings.scanner.max_hold_s
+        ):
+            freq = self.auto_hold_freq
+            reason = "silence" if silent_for < float("inf") else "max hold"
+            self.log_line(f"[magenta]AUTO[/magenta] releasing {freq / 1e6:.4f} MHz ({reason})")
+            self.stop_monitor(resume_sweep=False)
+            if self.sweeper is not None:
+                self.sweeper.cooldown_channel(freq)
+                self.sweeper.release_hold()
+            self.auto_hold_freq = None
+
+    def action_toggle_autonomous(self) -> None:
+        scanner = self.settings.scanner
+        scanner.autonomous = not scanner.autonomous
+        if not scanner.autonomous:
+            if self.sweeper is not None and self.sweeper.holding_active():
+                if self.monitor is not None and self.auto_hold_freq is not None:
+                    self.stop_monitor(resume_sweep=False)
+                self.sweeper.release_hold()
+            self.auto_hold_freq = None
+        self.log_line(
+            "[magenta]Autonomous scan-and-hold ON[/magenta]"
+            if scanner.autonomous
+            else "Autonomous mode OFF"
+        )
+        self.refresh_status()
+
     def start_monitor(
-        self, freq_hz: float, demod: DemodMode, muted: bool, enable_recorder: bool
+        self,
+        freq_hz: float,
+        demod: DemodMode,
+        muted: bool,
+        enable_recorder: bool,
+        pause_sweep: bool = True,
     ) -> None:
+        if self.sweeper is not None and self.sweeper.holding_active():
+            self.sweeper.release_hold()
+            self.auto_hold_freq = None
         self.stop_monitor(resume_sweep=False)
-        self._pause_sweeper_for_monitor()
+        if pause_sweep:
+            self._pause_sweeper_for_monitor()
         self.muted = muted
         monitor = ChannelMonitor(self.device, freq_hz, demod, self.settings, muted=muted)
         monitor.recorder.enabled = enable_recorder
@@ -306,8 +436,14 @@ class RadioTuiApp(App):
         self.log_line(f"{verb} [bold]{freq_hz / 1e6:.4f} MHz[/bold] ({demod.value})")
 
     def on_clip_end(self, clip) -> None:
+        self.post_message(self.ClipSaved(clip))
+
+    @on(ClipSaved)
+    def on_clip_saved(self, message) -> None:
         self.clips_saved += 1
-        self.log_line(f"[green]clip saved[/green] {clip.path.name} ({clip.seconds:.1f}s)")
+        self.log_line(
+            f"[green]clip saved[/green] {message.clip.path.name} ({message.clip.seconds:.1f}s)"
+        )
 
     def stop_monitor(self, resume_sweep: bool = True) -> None:
         if self.monitor is not None:
@@ -420,7 +556,12 @@ class RadioTuiApp(App):
         self.start_band("uhf_ham")
 
 
-def run_tui(force_sim: bool = False) -> int:
-    app = RadioTuiApp(force_sim=force_sim)
+def run_tui(
+    force_sim: bool = False,
+    bias_tee: bool = False,
+    ppm: int = 0,
+    offset_tune: bool = False,
+) -> int:
+    app = RadioTuiApp(force_sim=force_sim, bias_tee=bias_tee, ppm=ppm, offset_tune=offset_tune)
     app.run()
     return 0
