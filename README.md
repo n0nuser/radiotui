@@ -32,6 +32,65 @@ You also need the RTL-SDR userspace tools or at least `librtlsdr` on your
 system for real hardware (`sudo apt install rtl-sdr`), plus `ffmpeg` for audio
 playback (optional; falls back to `aplay`).
 
+### Linux hardware setup (validated on Ubuntu 24.04)
+
+```bash
+sudo apt install rtl-sdr ffmpeg   # librtlsdr userspace + audio playback
+```
+
+The DVB-T kernel driver (`dvb_usb_rtl28xxu`) claims the dongle by default.
+librtlsdr detaches it automatically on each open (you'll see
+`Detached kernel driver` on stderr), so no reboot is needed after dropping a
+blacklist file; to make it permanent:
+
+```bash
+echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/blacklist-dvb_usb_rtl28xxu.conf
+```
+
+**Ubuntu/Debian quirk:** the distro `librtlsdr2` package (2.0.1) lacks symbols
+that `pyrtlsdr` requires at import time (`rtlsdr_set_dithering`, GPIO helpers,
+`rtlsdr_set_and_get_tuner_bandwidth`), so `import rtlsdr` fails with
+`AttributeError: undefined symbol`. Fix without touching system packages by
+building a tiny forwarder library and putting it first on the loader path:
+
+```bash
+mkdir -p ~/.local/lib/rtlsdr-shim && cd ~/.local/lib/rtlsdr-shim
+cat > shim.c <<'EOF'
+/* Forwarder: adds symbols missing from Ubuntu's librtlsdr2 (2.0.1).
+   Real functionality comes from the DT_NEEDED system library;
+   dithering/GPIO stubs are functional no-ops (bias-tee still works,
+   the system build exports rtlsdr_set_bias_tee). */
+int rtlsdr_set_dithering(void *dev, int on) { (void)dev; (void)on; return 0; }
+int rtlsdr_set_gpio_output(void *dev, unsigned char g) { (void)dev; (void)g; return 0; }
+int rtlsdr_set_gpio_input(void *dev, unsigned char g) { (void)dev; (void)g; return 0; }
+int rtlsdr_set_gpio_bit(void *dev, unsigned char g, int v) { (void)dev; (void)g; (void)v; return 0; }
+unsigned char rtlsdr_get_gpio_bit(void *dev, unsigned char g) { (void)dev; (void)g; return 0; }
+int rtlsdr_set_gpio_byte(void *dev, int v) { (void)dev; (void)v; return 0; }
+unsigned char rtlsdr_get_gpio_byte(void *dev) { (void)dev; return 0; }
+int rtlsdr_set_gpio_status(void *dev, unsigned char *b) { (void)dev; if(b)*b=0; return 0; }
+int rtlsdr_set_and_get_tuner_bandwidth(void *dev, unsigned long bw,
+                                       unsigned long *applied, int apply) {
+    (void)dev; (void)bw; (void)apply; if(applied)*applied=0; return 0; }
+EOF
+gcc -shared -fPIC -Wl,-soname,librtlsdr.so -Wl,--no-as-needed \
+    -o librtlsdr.so shim.c -l:librtlsdr.so.2 -Wl,-rpath,/lib/x86_64-linux-gnu
+echo 'export LD_LIBRARY_PATH="$HOME/.local/lib/rtlsdr-shim${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' >> ~/.bashrc
+```
+
+Then verify with `radiotui devices`.
+
+### Measured performance (RTL-SDR v3, R820T)
+
+| Metric | Value |
+| --- | --- |
+| Device detection | `Realtek RTL2838UHIDIR SN 00000001`, works as non-root user |
+| FM broadcast sweep (27 hops) | ~9 s/sweep (~3 hops/s), USB-limited |
+| Simulated sweep | ~50 hops/s (no USB latency) |
+| Real noise floor | −49 dB @ gain 28 dB (simulator baseline: −62 dBFS); default threshold margin works unmodified |
+| DC spike | masked automatically around every hop center (±3% of sample rate, real devices only); no phantom channels observed |
+| Audio playback | `aplay` fallback works without ffmpeg |
+| Recordings | WAV clips land in `recordings/` (48 kHz mono PCM16) |
+
 ## Usage
 
 ```bash

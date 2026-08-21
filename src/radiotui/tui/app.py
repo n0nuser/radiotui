@@ -6,6 +6,7 @@ import queue
 import time
 
 from rich.text import Text
+from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -96,6 +97,7 @@ class RadioTuiApp(App):
         self.row_keys: list[float] = []
         self.selected_hz: float | None = None
         self.last_state: ScanState | None = None
+        self.last_rssi: float | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -242,11 +244,16 @@ class RadioTuiApp(App):
             mute = " 🔇" if self.muted else ""
             parts.append(
                 f"listening {self.monitor.freq_hz / 1e6:.4f} MHz "
-                f"({self.monitor.demod.value}) {self.monitor.rssi_dbfs:.0f} dBFS{mute}{rec}"
+                f"({self.monitor.demod.value}){mute}{rec}"
             )
         elif self.resume_sweep_after_listen:
             parts.append("sweep paused")
-        meter.update(Text.from_markup(" │ ".join(parts)))
+        lines = [Text.from_markup(" │ ".join(parts))]
+        if self.last_rssi is not None:
+            if self.monitor is not None:
+                lines.append(Text(f"{self.monitor.freq_hz / 1e6:.4f} MHz"))
+            lines.append(self.render_meter_bar(self.last_rssi))
+        meter.update(Text("\n").join(lines))
 
     def render_meter_bar(self, rssi: float) -> Text:
         lo, hi = -60.0, -10.0
@@ -306,6 +313,7 @@ class RadioTuiApp(App):
         if self.monitor is not None:
             self.monitor.stop()
             self.monitor = None
+            self.last_rssi = None
             self.log_line("Monitor stopped")
         if resume_sweep and self.resume_sweep_after_listen:
             self.resume_sweep_after_listen = False
@@ -376,16 +384,12 @@ class RadioTuiApp(App):
         report = format_report(analyze(freq))
         self.push_screen(AntennaModal(report))
 
+    @on(RssiUpdate)
     def on_rssi_update(self, message: RadioTuiApp.RssiUpdate) -> None:
-        meter = self.query_one("#meter", Static)
-        freq_line = (
-            Text(f"{self.monitor.freq_hz / 1e6:.4f} MHz\n")
-            if self.monitor is not None
-            else Text("")
-        )
-        meter.update(freq_line + self.render_meter_bar(message.rssi_dbfs))
+        self.last_rssi = message.rssi_dbfs
         self.refresh_status()
 
+    @on(MonitorError)
     def on_monitor_error(self, message: RadioTuiApp.MonitorError) -> None:
         self.log_line(f"[red]{message.text}[/red]")
 
