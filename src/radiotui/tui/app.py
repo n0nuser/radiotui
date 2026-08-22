@@ -32,6 +32,59 @@ from radiotui.tui.widgets.waterfall import Waterfall
 
 GAIN_MIN, GAIN_MAX, GAIN_STEP = 0.0, 49.6, 4.8
 
+KEY_DISPLAYS = {"plus": "+", "minus": "-", "question_mark": "?", "enter": "enter"}
+
+
+def _key_label(binding: Binding) -> str:
+    if binding.key_display:
+        return str(binding.key_display)
+    return KEY_DISPLAYS.get(binding.key, binding.key)
+
+
+def _band_key(name: str) -> int:
+    return sorted(BANDS).index(name) + 1
+
+
+def _is_band_binding(binding: Binding) -> bool:
+    return binding.action.startswith("band(")
+
+
+def build_help_text() -> str:
+    """Two-column key reference, generated from BINDINGS so it cannot go stale."""
+    left: list[tuple[str, str]] = []
+    right: list[tuple[str, str]] = []
+    for binding in RadioTuiApp.BINDINGS:
+        if not binding.show or _is_band_binding(binding):
+            continue
+        entry = (_key_label(binding), binding.description)
+        (left if len(left) <= len(right) else right).append(entry)
+    lines = ["[bold]Keys[/bold]"]
+    width_l = max(len(k) for k, _ in left)
+    width_r = max(len(k) for k, _ in right)
+    rows = max(len(left), len(right))
+    left += [("", "")] * (rows - len(left))
+    right += [("", "")] * (rows - len(right))
+    for (lk, ld), (rk, rd) in zip(left, right, strict=True):
+        lines.append(f"{lk:<{width_l}}  {ld:<28}{rk:<{width_r}}  {rd}")
+    lines += ["", "[bold]Band presets[/bold]"]
+    row = []
+    for i, name in enumerate(sorted(BANDS), start=1):
+        row.append(f"[cyan]{i}[/cyan] {BANDS[name].label:<18}")
+        if len(row) == 3:
+            lines.append("".join(row))
+            row = []
+    if row:
+        lines.append("".join(row))
+    lines += ["", "[dim]q / esc closes this overlay[/dim]"]
+    return "\n".join(lines)
+
+
+class HelpModal(ModalScreen):
+    BINDINGS = [Binding("q,escape", "dismiss", "Close")]
+
+    def compose(self) -> ComposeResult:
+        yield Static(build_help_text(), id="help-report")
+
 
 class AntennaModal(ModalScreen):
     BINDINGS = [Binding("q,escape", "dismiss", "Close")]
@@ -58,6 +111,8 @@ class RadioTuiApp(App):
     #log { height: 1fr; border: round #3b4d8f; }
     AntennaModal { align: center middle; background: #000000cc; }
     #antenna-report { width: 64; border: thick cyan; padding: 1 2; background: $surface; }
+    HelpModal { align: center middle; background: #000000cc; }
+    #help-report { width: 72; border: thick cyan; padding: 1 2; background: $surface; }
     """
     BINDINGS = [
         Binding("s", "toggle_sweep", "Sweep"),
@@ -71,6 +126,7 @@ class RadioTuiApp(App):
         Binding("minus", "gain_down", "Gain-", key_display="-"),
         Binding("a", "antenna", "Antenna"),
         Binding("o", "toggle_autonomous", "Auto"),
+        Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit", priority=True),
     ]
     for i, name in enumerate(sorted(BANDS), start=1):
@@ -533,6 +589,17 @@ class RadioTuiApp(App):
             return
         report = format_report(analyze(freq))
         self.push_screen(AntennaModal(report))
+
+    def action_quit(self) -> None:
+        # App-level q has priority over screen bindings, so a modal can never
+        # intercept it: close the topmost overlay instead of killing the app.
+        if len(self.screen_stack) > 1:
+            self.pop_screen()
+        else:
+            self.exit()
+
+    def action_help(self) -> None:
+        self.push_screen(HelpModal())
 
     @on(RssiUpdate)
     def on_rssi_update(self, message: RadioTuiApp.RssiUpdate) -> None:
