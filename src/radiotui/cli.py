@@ -262,7 +262,7 @@ def cmd_scan(args) -> None:
                 if state.error:
                     console.print(f"[red]Device error: {state.error}[/red]")
                     break
-                live.update(render_scan(state))
+                live.update(render_scan(state, simulated=not device.is_real))
                 if state.hold_request is not None:
                     budget = None
                     if args.seconds:
@@ -315,11 +315,13 @@ def _headless_auto_hold(device, sweeper, settings, req, budget_s: float | None =
     sweeper.release_hold()
 
 
-def render_scan(state) -> Table:
+def render_scan(state, simulated: bool = False) -> Table:
     title = (
         f"sweep #{state.sweeps_done}  "
         f"floor {state.noise_floor_db:.1f} dB  threshold {state.threshold_db:.1f} dB"
     )
+    if simulated:
+        title += "  [yellow](SIMULATED)[/yellow]"
     table = Table(title=title)
     table.add_column("Frequency", justify="right")
     table.add_column("BW kHz", justify="right")

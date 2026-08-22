@@ -123,6 +123,7 @@ class RadioTuiApp(App):
         self.selected_hz: float | None = None
         self.last_state: ScanState | None = None
         self.last_rssi: float | None = None
+        self._peak_rssi: float = -120.0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -305,6 +306,8 @@ class RadioTuiApp(App):
             parts.append("[cyan]HF[/cyan]")
         if self.bias_tee_on:
             parts.append("[yellow]bias ⚡[/yellow]")
+        if not self.is_real:
+            parts.append("[yellow]SIM[/yellow]")
         if self.settings.scanner.autonomous:
             hold = (
                 f" [magenta]HOLD {self.auto_hold_freq / 1e6:.3f}[/magenta]"
@@ -325,17 +328,27 @@ class RadioTuiApp(App):
         if self.last_rssi is not None:
             if self.monitor is not None:
                 lines.append(Text(f"{self.monitor.freq_hz / 1e6:.4f} MHz"))
-            lines.append(self.render_meter_bar(self.last_rssi))
+            lines.append(self.render_meter_bar(self.last_rssi, self._peak_rssi))
         meter.update(Text("\n").join(lines))
 
-    def render_meter_bar(self, rssi: float) -> Text:
+    def render_meter_bar(self, rssi: float, peak: float | None = None) -> Text:
         lo, hi = -60.0, -10.0
-        frac = max(0.0, min(1.0, (rssi - lo) / (hi - lo)))
-        filled = int(frac * 30)
-        bar = Text("█" * filled + "░" * (30 - filled))
-        color = "green" if frac < 0.6 else "yellow" if frac < 0.85 else "red"
+        width = 30
+
+        def frac(db: float) -> float:
+            return max(0.0, min(1.0, (db - lo) / (hi - lo)))
+
+        filled = int(frac(rssi) * width)
+        color = "green" if frac(rssi) < 0.6 else "yellow" if frac(rssi) < 0.85 else "red"
+        bar = Text("█" * filled + "░" * (width - filled))
         bar.stylize(color, 0, max(filled, 0))
-        return Text(f"RSSI {rssi:6.1f} dBFS\n") + bar
+        header = f"RSSI {rssi:6.1f} dBFS"
+        if peak is not None:
+            marker = min(int(frac(peak) * width), width - 1)
+            bar.stylize("reverse", marker, marker + 1)
+            delta = rssi - peak
+            header += "  ● at peak" if delta > -0.5 else f"  Δ{delta:+.1f} dB vs peak"
+        return Text(header + "\n") + bar
 
     # ---- actions ----
 
@@ -450,6 +463,7 @@ class RadioTuiApp(App):
             self.monitor.stop()
             self.monitor = None
             self.last_rssi = None
+            self._peak_rssi = -120.0
             self.log_line("Monitor stopped")
         if resume_sweep and self.resume_sweep_after_listen:
             self.resume_sweep_after_listen = False
@@ -523,6 +537,7 @@ class RadioTuiApp(App):
     @on(RssiUpdate)
     def on_rssi_update(self, message: RadioTuiApp.RssiUpdate) -> None:
         self.last_rssi = message.rssi_dbfs
+        self._peak_rssi = max(self._peak_rssi * 0.995, message.rssi_dbfs)
         self.refresh_status()
 
     @on(MonitorError)
