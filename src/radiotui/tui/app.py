@@ -225,6 +225,7 @@ class RadioTuiApp(App):
         bias_tee: bool = False,
         ppm: int = 0,
         offset_tune: bool = False,
+        settings: Settings | None = None,
     ) -> None:
         super().__init__()
         self._force_sim = force_sim
@@ -235,7 +236,7 @@ class RadioTuiApp(App):
         self.hf_active = False
         self.auto_hold_freq: float | None = None
         self._auto_hold_started_at = 0.0
-        self.settings = Settings()
+        self.settings = settings or Settings()
         self.device = None
         self.is_real = False
         self.plan: SweepPlan | None = None
@@ -793,7 +794,10 @@ def run_tui(
     bias_tee: bool = False,
     ppm: int = 0,
     offset_tune: bool = False,
+    settings: Settings | None = None,
 ) -> int:
-    app = RadioTuiApp(force_sim=force_sim, bias_tee=bias_tee, ppm=ppm, offset_tune=offset_tune)
+    app = RadioTuiApp(
+        force_sim=force_sim, bias_tee=bias_tee, ppm=ppm, offset_tune=offset_tune, settings=settings
+    )
     app.run()
     return 0

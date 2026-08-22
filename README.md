@@ -150,6 +150,29 @@ Hardware flags `--bias-tee`, `--ppm N` and `--offset-tune` work on every
 command (scan / listen / record / tuner / tui). Bands starting below 24 MHz
 switch into HF direct sampling automatically.
 
+### Config file (optional)
+
+Stop retyping flags: `~/.config/radiotui/config.toml` merges as
+**defaults → config file → CLI flags**, so flags still win. `radiotui config`
+shows the path; `--no-config` ignores it for one run.
+
+```toml
+[hardware]
+ppm = -70            # crystal correction, applied on every run
+bias_tee = true      # keep your LNA powered
+gain_db = 28.0       # default gain when --gain is not given
+
+[audio]
+recordings_dir = "~/radio/recordings"
+
+[[band]]             # custom presets join the built-ins:
+name = "ism_433"     # --band ism_433, a TUI number key, antenna advisor
+label = "ISM 433"
+start_hz = 433_050_000
+end_hz = 434_790_000
+demod = "nfm"
+```
+
 ### TUI keys
 
 | Key | Action |

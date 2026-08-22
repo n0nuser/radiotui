@@ -9,6 +9,7 @@ authors = [{ name = "Pablo" }]
 dependencies = [
     "numpy>=1.26",
     "textual>=0.60",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]

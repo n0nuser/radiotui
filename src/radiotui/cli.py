@@ -24,6 +24,15 @@ from radiotui.config import (
     enable_hf,
     freq_needs_hf,
 )
+from radiotui.config_file import (
+    ConfigError,
+    apply_config_to_settings,
+    apply_hardware_defaults,
+    config_path,
+    load_config,
+    register_user_bands,
+    runtime_settings,
+)
 from radiotui.core.models import DemodMode
 from radiotui.dsp.spectrum import SweepPlan
 from radiotui.scanner.monitor import ChannelMonitor, auto_hold_release_reason
@@ -116,6 +125,12 @@ def common_options() -> argparse.ArgumentParser:
         action="store_true",
         default=argparse.SUPPRESS,
         help="force the simulated device",
+    )
+    common.add_argument(
+        "--no-config",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="ignore the config file for this run",
     )
     return add_hw_options(common)
 
@@ -213,6 +228,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("tui", parents=[common_options()], help="launch the terminal UI (default)")
 
+    sub.add_parser("config", parents=[common_options()], help="show config file information")
+    p_config = sub.choices["config"]
+    p_config.add_argument("--path", action="store_true", help="print the config file path")
+
     return parser
 
 
@@ -228,8 +247,7 @@ def cmd_devices(_args) -> None:
 
 def cmd_scan(args) -> None:
     band = resolve_band(args)
-    settings = Settings()
-    settings.scanner.gain_db = args.gain
+    settings = getattr(args, "_settings", None) or Settings()
     settings.scanner.autonomous = args.autonomous
     device = open_device_or_exit(args.sim)
     apply_hw_options(device, args)
@@ -342,8 +360,7 @@ def render_scan(state, simulated: bool = False) -> Table:
 
 
 def run_monitor(args, freq: float):
-    settings = Settings()
-    settings.scanner.gain_db = args.gain
+    settings = getattr(args, "_settings", None) or Settings()
     demod = DemodMode(args.demod) if args.demod else guess_demod(freq)
     device = open_device_or_exit(args.sim)
     apply_hw_options(device, args)
@@ -408,8 +425,7 @@ def cmd_antenna(args) -> None:
 
 
 def cmd_tuner(args) -> None:
-    settings = Settings()
-    settings.scanner.gain_db = args.gain
+    settings = getattr(args, "_settings", None) or Settings()
     demod = DemodMode(args.demod) if args.demod else guess_demod(args.freq)
     device = open_device_or_exit(args.sim)
     monitor = ChannelMonitor(device, args.freq, demod, settings, muted=True)
@@ -457,6 +473,23 @@ def render_meter(rssi: float, peak: float, freq: float) -> Panel:
     return Panel(body, title="Antenna Tuner", border_style="cyan")
 
 
+def cmd_config(args) -> int:
+    path = config_path()
+    exists = path.exists()
+    console.print(f"Config file: [bold]{path}[/bold] ({'present' if exists else 'not created'})")
+    if args.path or not exists:
+        return 0
+    data = load_config(path)
+    if not data:
+        console.print("[dim]Empty - running on built-in defaults.[/dim]")
+        return 0
+    settings = Settings()
+    apply_config_to_settings(settings, data, path)
+    console.print(f"[scanner] threshold_margin_db = {settings.scanner.threshold_margin_db}")
+    console.print(f"[audio] recordings_dir = {settings.audio.recordings_dir}")
+    return 0
+
+
 COMMANDS = {
     "devices": cmd_devices,
     "scan": cmd_scan,
@@ -468,16 +501,37 @@ COMMANDS = {
 
 
 def main(argv: list[str] | None = None) -> int:
-    from radiotui.tui.app import run_tui
+    argv = list(sys.argv[1:]) if argv is None else list(argv)
+    use_config = "--no-config" not in argv
+
+    data: dict = {}
+    if use_config:
+        try:
+            data = load_config()
+            register_user_bands(data)
+        except ConfigError as exc:
+            console.print(f"[red]Config error:[/] {exc}")
+            return 2
 
     parser = build_parser()
     args = apply_flag_defaults(parser.parse_args(argv))
+    if args.command == "config":
+        return cmd_config(args)
+    try:
+        apply_hardware_defaults(args, data)
+    except ConfigError as exc:
+        console.print(f"[red]Config error:[/] {exc}")
+        return 2
+    args._settings = runtime_settings(args, data)
     if not args.command or args.command == "tui":
+        from radiotui.tui.app import run_tui
+
         return run_tui(
             force_sim=args.sim,
             bias_tee=args.bias_tee,
             ppm=args.ppm,
             offset_tune=args.offset_tune,
+            settings=args._settings,
         )
     COMMANDS[args.command](args)
     return 0
