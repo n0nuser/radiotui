@@ -84,6 +84,7 @@ def test_base_class_defaults_are_safe_noops():
 @pytest.mark.parametrize(
     ("command", "extra"),
     [
+        ("devices", []),
         ("scan", []),
         ("listen", ["145.500e6"]),
         ("record", ["446.00625e6"]),
@@ -92,24 +93,66 @@ def test_base_class_defaults_are_safe_noops():
     ],
 )
 def test_cli_hw_flags_on_all_commands(command, extra):
-    from radiotui.cli import build_parser
+    from radiotui.cli import apply_flag_defaults, build_parser
 
-    parser = build_parser()
-    args = parser.parse_args([command, "--bias-tee"] + extra)
+    args = apply_flag_defaults(build_parser().parse_args([command, "--bias-tee"] + extra))
     assert args.bias_tee
     assert args.ppm == 0
     assert not args.offset_tune
 
-    args = parser.parse_args([command, "--ppm", "-70", "--offset-tune"] + extra)
+    args = apply_flag_defaults(
+        build_parser().parse_args([command, "--ppm", "-70", "--offset-tune"] + extra)
+    )
     assert args.ppm == -70
     assert args.offset_tune
     assert not args.bias_tee
 
 
-def test_cli_main_parser_accepts_hw_flags():
-    from radiotui.cli import build_parser
+@pytest.mark.parametrize("position", ["before", "after"])
+@pytest.mark.parametrize(
+    ("flags", "check"),
+    [
+        (["--sim"], lambda a: a.sim is True),
+        (["--bias-tee"], lambda a: a.bias_tee is True),
+        (["--ppm", "-70"], lambda a: a.ppm == -70),
+        (["--offset-tune"], lambda a: a.offset_tune is True),
+    ],
+)
+@pytest.mark.parametrize(
+    ("command", "extra"),
+    [
+        ("devices", []),
+        ("scan", []),
+        ("listen", ["145.500e6"]),
+        ("record", ["446.00625e6"]),
+        ("tuner", ["145.500e6"]),
+        ("tui", []),
+    ],
+)
+def test_cli_flags_work_in_both_positions(command, extra, flags, check, position):
+    """Issue #9: every common flag must work before AND after the subcommand."""
+    from radiotui.cli import apply_flag_defaults, build_parser
 
-    args = build_parser().parse_args(["--bias-tee"])
+    tail = [command] + extra
+    argv = flags + tail if position == "before" else tail + flags
+    args = apply_flag_defaults(build_parser().parse_args(argv))
+    assert check(args)
+
+
+def test_cli_flag_defaults_resolved_once():
+    from radiotui.cli import apply_flag_defaults, build_parser
+
+    args = apply_flag_defaults(build_parser().parse_args(["scan", "--band", "pmr446"]))
+    assert not args.sim
+    assert not args.bias_tee
+    assert args.ppm == 0
+    assert not args.offset_tune
+
+
+def test_cli_main_parser_accepts_hw_flags():
+    from radiotui.cli import apply_flag_defaults, build_parser
+
+    args = apply_flag_defaults(build_parser().parse_args(["--bias-tee"]))
     assert args.bias_tee
 
 

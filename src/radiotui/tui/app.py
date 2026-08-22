@@ -24,7 +24,7 @@ from radiotui.config import (
 )
 from radiotui.core.models import Channel, DemodMode, ScanState
 from radiotui.dsp.spectrum import SweepPlan
-from radiotui.scanner.monitor import ChannelMonitor
+from radiotui.scanner.monitor import ChannelMonitor, auto_hold_release_reason
 from radiotui.scanner.sweeper import Sweeper
 from radiotui.sdr.manager import open_device
 from radiotui.tui.widgets.spectrum import SpectrumBar
@@ -74,7 +74,7 @@ class RadioTuiApp(App):
         Binding("q", "quit", "Quit", priority=True),
     ]
     for i, name in enumerate(sorted(BANDS), start=1):
-        BINDINGS.append(Binding(str(i), f"band_{name}", BANDS[name].label, show=False))
+        BINDINGS.append(Binding(str(i), f"band('{name}')", BANDS[name].label, show=False))
 
     class RssiUpdate(Message):
         def __init__(self, rssi_dbfs: float) -> None:
@@ -386,7 +386,7 @@ class RadioTuiApp(App):
             or held_for >= self.settings.scanner.max_hold_s
         ):
             freq = self.auto_hold_freq
-            reason = "silence" if silent_for < float("inf") else "max hold"
+            reason = auto_hold_release_reason(silent_for, self.settings.scanner.hold_release_s)
             self.log_line(f"[magenta]AUTO[/magenta] releasing {freq / 1e6:.4f} MHz ({reason})")
             self.stop_monitor(resume_sweep=False)
             if self.sweeper is not None:
@@ -537,23 +537,8 @@ class RadioTuiApp(App):
         if self.device is not None:
             self.device.close()
 
-    def action_band_fm_broadcast(self) -> None:
-        self.start_band("fm_broadcast")
-
-    def action_band_airband(self) -> None:
-        self.start_band("airband")
-
-    def action_band_vhf_ham(self) -> None:
-        self.start_band("vhf_ham")
-
-    def action_band_vhf_marine(self) -> None:
-        self.start_band("vhf_marine")
-
-    def action_band_pmr446(self) -> None:
-        self.start_band("pmr446")
-
-    def action_band_uhf_ham(self) -> None:
-        self.start_band("uhf_ham")
+    def action_band(self, name: str) -> None:
+        self.start_band(name)
 
 
 def run_tui(

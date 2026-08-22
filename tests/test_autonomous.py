@@ -5,6 +5,7 @@ import queue
 import time
 
 import numpy as np
+import pytest
 
 from radiotui.audio.recorder import VoxRecorder
 from radiotui.config import AudioSettings, ScannerSettings
@@ -12,6 +13,7 @@ from radiotui.core.models import DemodMode, HoldRequest
 from radiotui.dsp.spectrum import SweepPlan
 from radiotui.scanner.sweeper import Sweeper
 from radiotui.sdr.simulator import SimCarrier, SimulatedDevice
+from radiotui.tui.app import RadioTuiApp
 
 
 def make_sweeper(**overrides):
@@ -126,3 +128,85 @@ def test_hold_request_defaults_roundtrip():
     req = HoldRequest(freq_hz=145.5e6, demod=DemodMode.NFM, snr_db=17.5)
     assert req.freq_hz == 145.5e6
     assert req.demod == DemodMode.NFM
+
+
+# ---- issue #22: the reported release reason must match what fired ----
+
+HOLD_RELEASE_S = 4.0
+MAX_HOLD_S = 120.0
+
+
+@pytest.mark.parametrize(
+    ("silent_for", "expected"),
+    [
+        (float("inf"), "no traffic"),
+        (30.0, "silence"),
+        (1.5, "max hold"),
+    ],
+)
+def test_auto_hold_release_reason_paths(silent_for, expected):
+    from radiotui.scanner.monitor import auto_hold_release_reason
+
+    assert auto_hold_release_reason(silent_for, HOLD_RELEASE_S) == expected
+
+
+async def _hold_log_line(app) -> str:
+    from textual.widgets import RichLog
+
+    log = app.query_one("#log", RichLog)
+    for line in reversed(log.lines):
+        if "releasing" in line.text:
+            return line.text
+    return ""
+
+
+async def test_auto_hold_release_reports_no_traffic() -> None:
+    """A channel that never produced voice is labeled 'no traffic', not 'max hold'."""
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        app.settings.scanner.autonomous = True
+        app._engage_auto_hold(HoldRequest(freq_hz=100e6, demod=DemodMode.WFM, snr_db=15))
+        await pilot.pause(0.3)
+        assert app.auto_hold_freq is not None
+        app._pause_sweeper_for_monitor()
+        app._auto_hold_started_at = time.time() - MAX_HOLD_S / 2
+        app.monitor.recorder.last_voice_ts = None  # never any voice
+        app._auto_release_check()
+        await pilot.pause(0.1)
+        assert "no traffic" in await _hold_log_line(app)
+        assert app.auto_hold_freq is None
+
+
+async def test_auto_hold_release_reports_max_hold() -> None:
+    """Released while still talking (held past max_hold_s) is labeled 'max hold'."""
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        app.settings.scanner.autonomous = True
+        app._engage_auto_hold(HoldRequest(freq_hz=100e6, demod=DemodMode.WFM, snr_db=15))
+        await pilot.pause(0.3)
+        assert app.auto_hold_freq is not None
+        app._pause_sweeper_for_monitor()
+        app._auto_hold_started_at = time.time() - (MAX_HOLD_S + 10)
+        app.monitor.recorder.last_voice_ts = time.time()  # voice right now
+        app._auto_release_check()
+        await pilot.pause(0.1)
+        assert "max hold" in await _hold_log_line(app)
+
+
+async def test_auto_hold_release_reports_silence() -> None:
+    """Voice that stopped long enough ago is labeled 'silence'."""
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        app.settings.scanner.autonomous = True
+        app._engage_auto_hold(HoldRequest(freq_hz=100e6, demod=DemodMode.WFM, snr_db=15))
+        await pilot.pause(0.3)
+        assert app.auto_hold_freq is not None
+        app._pause_sweeper_for_monitor()
+        app._auto_hold_started_at = time.time() - 1.0
+        app.monitor.recorder.last_voice_ts = time.time() - (HOLD_RELEASE_S + 10)
+        app._auto_release_check()
+        await pilot.pause(0.1)
+        assert "silence" in await _hold_log_line(app)

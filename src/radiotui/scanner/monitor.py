@@ -12,6 +12,22 @@ from radiotui.config import Settings, effective_sample_rate
 from radiotui.core.models import DemodMode
 from radiotui.sdr.base import SdrDevice
 
+NEVER_VOICED = float("inf")
+
+
+def auto_hold_release_reason(seconds_since_voice: float, hold_release_s: float) -> str:
+    """Label matching whichever autonomous-hold release condition fired.
+
+    ``seconds_since_voice == inf`` means no voice was ever detected on the
+    channel, which is worth diagnosing differently from a transmission that
+    simply ended.
+    """
+    if seconds_since_voice == NEVER_VOICED:
+        return "no traffic"
+    if seconds_since_voice >= hold_release_s:
+        return "silence"
+    return "max hold"
+
 
 class ChannelMonitor:
     def __init__(

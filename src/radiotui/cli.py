@@ -26,7 +26,7 @@ from radiotui.config import (
 )
 from radiotui.core.models import DemodMode
 from radiotui.dsp.spectrum import SweepPlan
-from radiotui.scanner.monitor import ChannelMonitor
+from radiotui.scanner.monitor import ChannelMonitor, auto_hold_release_reason
 from radiotui.scanner.sweeper import Sweeper
 from radiotui.sdr.base import SdrDevice
 from radiotui.sdr.manager import OpenedDevice, describe_devices, open_device
@@ -81,14 +81,52 @@ def open_device_or_exit(force_sim: bool) -> SdrDevice:
 
 
 def add_hw_options(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Hardware flags with suppressed defaults.
+
+    ``SUPPRESS`` keeps unset flags out of the namespace so that a value given
+    before the subcommand is not clobbered by the subparser's defaults.
+    """
     parser.add_argument(
-        "--bias-tee", action="store_true", help="power an LNA via bias tee (~4.5 V)"
+        "--bias-tee",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="power an LNA via bias tee (~4.5 V)",
     )
-    parser.add_argument("--ppm", type=int, default=0, metavar="N", help="crystal correction in ppm")
     parser.add_argument(
-        "--offset-tune", action="store_true", help="tune LO offset by fs/4 (avoids DC spike)"
+        "--ppm",
+        type=int,
+        default=argparse.SUPPRESS,
+        metavar="N",
+        help="crystal correction in ppm",
+    )
+    parser.add_argument(
+        "--offset-tune",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="tune LO offset by fs/4 (avoids DC spike)",
     )
     return parser
+
+
+def common_options() -> argparse.ArgumentParser:
+    """Shared parent parser: --sim plus the hardware flags, valid in either position."""
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--sim",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="force the simulated device",
+    )
+    return add_hw_options(common)
+
+
+def apply_flag_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """Resolve defaults for flags defined with ``SUPPRESS`` exactly once."""
+    args.sim = getattr(args, "sim", False)
+    args.bias_tee = getattr(args, "bias_tee", False)
+    args.ppm = getattr(args, "ppm", 0) or 0
+    args.offset_tune = getattr(args, "offset_tune", False)
+    return args
 
 
 def announce_hf(device: SdrDevice) -> None:
@@ -125,15 +163,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="radiotui",
         description="Autonomous RTL-SDR spectrum scanner with terminal UI.",
+        parents=[common_options()],
     )
-    parser.add_argument("--sim", action="store_true", help="force the simulated device")
-    add_hw_options(parser)
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("devices", help="list detected SDR hardware")
+    sub.add_parser("devices", parents=[common_options()], help="list detected SDR hardware")
 
-    p_scan = sub.add_parser("scan", help="headless sweep with live table")
-    add_hw_options(p_scan)
+    p_scan = sub.add_parser(
+        "scan", parents=[common_options()], help="headless sweep with live table"
+    )
     p_scan.add_argument("--band", choices=sorted(BANDS), help="preset band")
     p_scan.add_argument("--start", type=float, metavar="MHZ")
     p_scan.add_argument("--end", type=float, metavar="MHZ")
@@ -146,32 +184,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="auto-hold on live channels: VOX-record, release on silence",
     )
 
-    p_listen = sub.add_parser("listen", help="tune a frequency and play audio")
+    p_listen = sub.add_parser(
+        "listen", parents=[common_options()], help="tune a frequency and play audio"
+    )
     p_listen.add_argument("freq", type=parse_freq, metavar="FREQ")
     p_listen.add_argument("--demod", choices=[d.value for d in DemodMode], default=None)
     p_listen.add_argument("--gain", type=float, default=None)
     p_listen.add_argument("--record", action="store_true", help="also VOX-record clips")
     p_listen.add_argument("--seconds", type=float, default=None)
-    add_hw_options(p_listen)
 
-    p_record = sub.add_parser("record", help="VOX-record transmissions to WAV files")
+    p_record = sub.add_parser(
+        "record", parents=[common_options()], help="VOX-record transmissions to WAV files"
+    )
     p_record.add_argument("freq", type=parse_freq, metavar="FREQ")
     p_record.add_argument("--demod", choices=[d.value for d in DemodMode], default=None)
     p_record.add_argument("--gain", type=float, default=None)
     p_record.add_argument("--seconds", type=float, default=None)
-    add_hw_options(p_record)
 
-    p_ant = sub.add_parser("antenna", help="antenna advisor report")
+    p_ant = sub.add_parser("antenna", parents=[common_options()], help="antenna advisor report")
     p_ant.add_argument("freq", type=parse_freq, metavar="FREQ")
 
-    p_tuner = sub.add_parser("tuner", help="live signal bar to optimize antenna placement")
+    p_tuner = sub.add_parser(
+        "tuner", parents=[common_options()], help="live signal bar to optimize antenna placement"
+    )
     p_tuner.add_argument("freq", type=parse_freq, metavar="FREQ")
     p_tuner.add_argument("--demod", choices=[d.value for d in DemodMode], default=None)
     p_tuner.add_argument("--gain", type=float, default=None)
-    add_hw_options(p_tuner)
 
-    p_tui = sub.add_parser("tui", help="launch the terminal UI (default)")
-    add_hw_options(p_tui)
+    sub.add_parser("tui", parents=[common_options()], help="launch the terminal UI (default)")
 
     return parser
 
@@ -251,19 +291,26 @@ def _headless_auto_hold(device, sweeper, settings, req, budget_s: float | None =
     )
     monitor.start()
     t_hold = time.time()
+    reason = "monitor stopped"
     while monitor.running:
         time.sleep(0.2)
-        silent = monitor.recorder.seconds_since_voice() >= settings.scanner.hold_release_s
-        expired = time.time() - t_hold >= settings.scanner.max_hold_s
-        out_of_time = budget_s is not None and time.time() - t_hold >= budget_s
+        silent_for = monitor.recorder.seconds_since_voice()
+        held_for = time.time() - t_hold
+        silent = silent_for >= settings.scanner.hold_release_s
+        expired = held_for >= settings.scanner.max_hold_s
+        out_of_time = budget_s is not None and held_for >= budget_s
         if silent or expired or out_of_time:
+            if out_of_time and not silent:
+                reason = "out of time"
+            else:
+                reason = auto_hold_release_reason(silent_for, settings.scanner.hold_release_s)
             break
     clips = monitor.recorder.stop()
     monitor.stop()
     if not clips:
-        console.print("[dim]AUTO hold ended without transmissions.[/dim]")
+        console.print(f"[dim]AUTO hold ended ({reason}) without transmissions.[/dim]")
     else:
-        console.print(f"[dim]AUTO released after {len(clips)} clip(s).[/dim]")
+        console.print(f"[dim]AUTO released ({reason}) after {len(clips)} clip(s).[/dim]")
     sweeper.cooldown_channel(req.freq_hz)
     sweeper.release_hold()
 
@@ -422,13 +469,13 @@ def main(argv: list[str] | None = None) -> int:
     from radiotui.tui.app import run_tui
 
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = apply_flag_defaults(parser.parse_args(argv))
     if not args.command or args.command == "tui":
         return run_tui(
             force_sim=args.sim,
-            bias_tee=getattr(args, "bias_tee", False),
-            ppm=getattr(args, "ppm", 0) or 0,
-            offset_tune=getattr(args, "offset_tune", False),
+            bias_tee=args.bias_tee,
+            ppm=args.ppm,
+            offset_tune=args.offset_tune,
         )
     COMMANDS[args.command](args)
     return 0
