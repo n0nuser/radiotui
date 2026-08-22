@@ -122,6 +122,7 @@ class RadioTuiApp(App):
         Binding("r", "record", "Record"),
         Binding("n", "next_channel", "Next"),
         Binding("p", "prev_channel", "Prev"),
+        Binding("comma", "toggle_sort", "Sort", key_display=",", show=False),
         Binding("plus", "gain_up", "Gain+", key_display="+"),
         Binding("minus", "gain_down", "Gain-", key_display="-"),
         Binding("greater_than_sign", "volume_up", "Vol+", key_display=">", show=False),
@@ -178,6 +179,9 @@ class RadioTuiApp(App):
         self.muted = False
         self.clips_saved = 0
         self.row_keys: list[float] = []
+        self.sort_by_peak = False
+        self._rendered_cells: dict[str, tuple[str, ...]] = {}
+        self._last_channels: list[Channel] = []
         self.selected_hz: float | None = None
         self.last_state: ScanState | None = None
         self.last_rssi: float | None = None
@@ -207,6 +211,7 @@ class RadioTuiApp(App):
             ("age", "Age s", 7),
         ):
             table.add_column(label, key=key, width=width)
+        self._apply_sort_markers()
 
         try:
             opened = open_device(prefer_real=not self._force_sim)
@@ -312,28 +317,62 @@ class RadioTuiApp(App):
 
     def refresh_table(self, channels: list[Channel]) -> None:
         table = self.query_one("#channels", DataTable)
+        self._last_channels = channels
         previous_key = self.selected_key()
-        channels_sorted = sorted(channels, key=lambda c: c.peak_db, reverse=True)
+        channels_sorted = self._sorted_channels(channels)
         self.row_keys = [ch.center_hz for ch in channels_sorted]
-        table.clear()
         now = time.time()
-        for ch in channels_sorted:
-            table.add_row(
-                f"{ch.center_hz / 1e6:.4f}",
-                f"{ch.bandwidth_hz / 1e3:.0f}",
-                f"{ch.peak_db:.1f}",
-                f"{ch.snr_db:.1f}",
-                str(ch.hits),
-                ch.demod.value,
-                f"{now - ch.last_seen:.0f}",
-                key=str(ch.center_hz),
-            )
+        wanted_keys = [str(ch.center_hz) for ch in channels_sorted]
+        cells_by_key = {str(ch.center_hz): self._row_cells(ch, now) for ch in channels_sorted}
+        if [row_key.value for row_key in table.rows] != wanted_keys:
+            # Membership or order changed: rebuild the row structure.
+            table.clear()
+            for key, cells in zip(wanted_keys, cells_by_key.values(), strict=True):
+                table.add_row(*cells, key=key)
+        else:
+            for key, cells in cells_by_key.items():
+                if cells == self._rendered_cells.get(key):
+                    continue
+                for column_key, value in zip(self.COLUMN_KEYS, cells, strict=True):
+                    table.update_cell(key, column_key, value)
+        self._rendered_cells = cells_by_key
         if previous_key is not None:
             try:
                 row_index = self.row_keys.index(previous_key)
                 table.move_cursor(row=row_index, column=0)
             except ValueError:
                 pass
+
+    COLUMN_KEYS = ("freq", "bw", "peak", "snr", "hits", "demod", "age")
+
+    @staticmethod
+    def _row_cells(ch: Channel, now: float) -> tuple[str, ...]:
+        return (
+            f"{ch.center_hz / 1e6:.4f}",
+            f"{ch.bandwidth_hz / 1e3:.0f}",
+            f"{ch.peak_db:.1f}",
+            f"{ch.snr_db:.1f}",
+            str(ch.hits),
+            ch.demod.value,
+            f"{now - ch.last_seen:.0f}",
+        )
+
+    def _sorted_channels(self, channels: list[Channel]) -> list[Channel]:
+        if self.sort_by_peak:
+            return sorted(channels, key=lambda c: c.peak_db, reverse=True)
+        return sorted(channels, key=lambda c: c.center_hz)
+
+    def _apply_sort_markers(self) -> None:
+        table = self.query_one("#channels", DataTable)
+        table.columns["freq"].label = "Freq MHz" if self.sort_by_peak else "Freq MHz ▾"
+        table.columns["peak"].label = "Peak dB ▾" if self.sort_by_peak else "Peak dB"
+
+    def action_toggle_sort(self) -> None:
+        self.sort_by_peak = not self.sort_by_peak
+        self._apply_sort_markers()
+        self.log_line("Sorted by peak strength" if self.sort_by_peak else "Sorted by frequency")
+        if self._last_channels:
+            self.refresh_table(self._last_channels)
 
     def selected_key(self) -> float | None:
         table = self.query_one("#channels", DataTable)
