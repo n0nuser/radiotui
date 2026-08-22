@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import queue
 import time
 from pathlib import Path
@@ -17,22 +16,26 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
 
 from radiotui.antenna.advisor import analyze, format_report
-from radiotui.cli import guess_demod, parse_freq
 from radiotui.config import (
     BANDS,
+    DWELL_RANGE_S,
+    THRESHOLD_MARGIN_RANGE,
     Band,
     Settings,
     band_needs_hf,
+    clamp,
     effective_sample_rate,
     enable_hf,
 )
 from radiotui.core.models import Channel, DemodMode, ScanState
 from radiotui.dsp.spectrum import SweepPlan
+from radiotui.export import export_channels, export_path_for
 from radiotui.scanner.monitor import ChannelMonitor, auto_hold_release_reason
 from radiotui.scanner.sweeper import Sweeper
 from radiotui.sdr.manager import open_device
 from radiotui.tui.widgets.spectrum import SpectrumBar
 from radiotui.tui.widgets.waterfall import Waterfall
+from radiotui.tuning import guess_demod, parse_tune_request
 
 GAIN_MIN, GAIN_MAX, GAIN_STEP = 0.0, 49.6, 4.8
 
@@ -53,8 +56,12 @@ def _is_band_binding(binding: Binding) -> bool:
     return binding.action.startswith("band(")
 
 
-def build_help_text() -> str:
-    """Two-column key reference, generated from BINDINGS so it cannot go stale."""
+def build_help_text() -> Text:
+    """Key reference generated from BINDINGS so it cannot go stale.
+
+    Built as styled ``Text`` rather than a markup string because key labels
+    like ``[`` are literal characters that a markup parser would misread.
+    """
     left: list[tuple[str, str]] = []
     right: list[tuple[str, str]] = []
     for binding in RadioTuiApp.BINDINGS:
@@ -62,25 +69,29 @@ def build_help_text() -> str:
             continue
         entry = (_key_label(binding), binding.description)
         (left if len(left) <= len(right) else right).append(entry)
-    lines = ["[bold]Keys[/bold]"]
     width_l = max(len(k) for k, _ in left)
     width_r = max(len(k) for k, _ in right)
     rows = max(len(left), len(right))
     left += [("", "")] * (rows - len(left))
     right += [("", "")] * (rows - len(right))
+
+    text = Text()
+    text.append("Keys\n", style="bold")
     for (lk, ld), (rk, rd) in zip(left, right, strict=True):
-        lines.append(f"{lk:<{width_l}}  {ld:<28}{rk:<{width_r}}  {rd}")
-    lines += ["", "[bold]Band presets[/bold]"]
-    row = []
+        text.append(f"{lk:<{width_l}}  {ld:<28}{rk:<{width_r}}  {rd}\n")
+    text.append("\nBand presets\n", style="bold")
+    row_count = 0
     for i, name in enumerate(sorted(BANDS), start=1):
-        row.append(f"[cyan]{i}[/cyan] {BANDS[name].label:<18}")
-        if len(row) == 3:
-            lines.append("".join(row))
-            row = []
-    if row:
-        lines.append("".join(row))
-    lines += ["", "[dim]q / esc closes this overlay[/dim]"]
-    return "\n".join(lines)
+        text.append(str(i), style="cyan")
+        text.append(f" {BANDS[name].label:<18}")
+        row_count += 1
+        if row_count == 3:
+            text.append("\n")
+            row_count = 0
+    if row_count:
+        text.append("\n")
+    text.append("\nq / esc closes this overlay", style="dim")
+    return text
 
 
 class HelpModal(ModalScreen):
@@ -88,47 +99,6 @@ class HelpModal(ModalScreen):
 
     def compose(self) -> ComposeResult:
         yield Static(build_help_text(), id="help-report")
-
-
-def _token_to_hz(token: str) -> float:
-    """Bare numbers mean MHz; anything else goes through the CLI's parse_freq."""
-    try:
-        return float(token) * 1e6
-    except ValueError:
-        pass
-    try:
-        return parse_freq(token)
-    except argparse.ArgumentTypeError as exc:
-        raise ValueError(str(exc)) from None
-
-
-def parse_tune_request(text: str) -> tuple[float, float | None, DemodMode]:
-    """Parse a tune entry: '145.5', '430-440', optional ' nfm|wfm|am' demod suffix.
-
-    Returns ``(freq_hz, None, demod)`` for a single frequency or
-    ``(start_hz, end_hz, demod)`` for a range.
-    """
-    parts = text.strip().lower().split()
-    if len(parts) == 2 and parts[1] in {d.value for d in DemodMode}:
-        demod = DemodMode(parts[1])
-        spec = parts[0]
-    elif len(parts) == 1:
-        demod = None
-        spec = parts[0] if parts else ""
-    else:
-        raise ValueError(f"cannot parse '{text.strip()}'")
-    if not spec:
-        raise ValueError("enter a frequency or a start-end range")
-    if "-" in spec:
-        lo, _, hi = spec.partition("-")
-        try:
-            start_hz, end_hz = _token_to_hz(lo), _token_to_hz(hi)
-        except ValueError:
-            raise ValueError(f"cannot parse range '{spec}'") from None
-        if end_hz <= start_hz:
-            raise ValueError(f"end of range must be above start in '{spec}'")
-        return start_hz, end_hz, demod
-    return _token_to_hz(spec), None, demod
 
 
 class TuneModal(ModalScreen):
@@ -196,6 +166,10 @@ class RadioTuiApp(App):
         Binding("minus", "gain_down", "Gain-", key_display="-"),
         Binding("greater_than_sign", "volume_up", "Vol+", key_display=">", show=False),
         Binding("less_than_sign", "volume_down", "Vol-", key_display="<", show=False),
+        Binding("right_square_bracket", "threshold_up", "Thr+", key_display="]", show=False),
+        Binding("left_square_bracket", "threshold_down", "Thr-", key_display="[", show=False),
+        Binding("right_curly_bracket", "dwell_up", "Dwell+", key_display="}", show=False),
+        Binding("left_curly_bracket", "dwell_down", "Dwell-", key_display="{", show=False),
         Binding("a", "antenna", "Antenna"),
         Binding("o", "toggle_autonomous", "Auto"),
         Binding("e", "export_channels", "Export"),
@@ -473,6 +447,8 @@ class RadioTuiApp(App):
         ]
         if self.last_state:
             parts.append(f"floor {self.last_state.noise_floor_db:.1f} dB")
+        parts.append(f"thr {self.settings.scanner.threshold_margin_db:+.1f} dB")
+        parts.append(f"dwell {self.settings.scanner.hop_dwell_s * 1000:.0f} ms")
         gain_label = f"{self.gain_db:.1f} dB" if self.gain_db is not None else "auto"
         parts.append(f"gain {gain_label}")
         if self.hf_active:
@@ -725,6 +701,31 @@ class RadioTuiApp(App):
         self.monitor.set_volume_db(self.monitor.volume_db + delta_db)
         self.refresh_status()
 
+    def action_threshold_up(self) -> None:
+        self._adjust_threshold(+1.0)
+
+    def action_threshold_down(self) -> None:
+        self._adjust_threshold(-1.0)
+
+    def _adjust_threshold(self, delta_db: float) -> None:
+        lo, hi = THRESHOLD_MARGIN_RANGE
+        scanner = self.settings.scanner
+        margin = clamp(scanner.threshold_margin_db + delta_db, lo, hi)
+        scanner.threshold_margin_db = round(margin, 1)
+        self.refresh_status()
+
+    def action_dwell_up(self) -> None:
+        self._adjust_dwell(+0.02)
+
+    def action_dwell_down(self) -> None:
+        self._adjust_dwell(-0.02)
+
+    def _adjust_dwell(self, delta_s: float) -> None:
+        lo, hi = DWELL_RANGE_S
+        scanner = self.settings.scanner
+        scanner.hop_dwell_s = round(clamp(scanner.hop_dwell_s + delta_s, lo, hi), 3)
+        self.refresh_status()
+
     def action_antenna(self) -> None:
         channel = self.selected_channel()
         freq = channel.center_hz if channel else (self.monitor.freq_hz if self.monitor else None)
@@ -746,8 +747,6 @@ class RadioTuiApp(App):
         self.push_screen(HelpModal())
 
     def action_export_channels(self) -> None:
-        from radiotui.export import export_channels, export_path_for
-
         channels = self.sweeper.channels if self.sweeper is not None else []
         if not channels:
             self.log_line("[yellow]Nothing to export yet - no channels discovered.[/yellow]")

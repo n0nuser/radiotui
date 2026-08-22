@@ -39,6 +39,8 @@ def apply_librtlsdr_compat() -> bool:
                     return ctypes.CFUNCTYPE(ctypes.c_int)(lambda *_args: 0)
                 raise
 
-        ctypes.CDLL.__getattr__ = tolerant_getattr  # type: ignore[method-assign]
+        # ctypes.CDLL.__getattr__ is being replaced deliberately; there is no
+        # other way to make symbol resolution tolerant for pyrtlsdr's eager lookups.
+        ctypes.CDLL.__getattr__ = tolerant_getattr  # type: ignore[method-assign] — intentional monkeypatch, see comment above
         _APPLIED = True
         return True

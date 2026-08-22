@@ -2,7 +2,11 @@
 
 import csv
 import json
+import subprocess
+import sys
 from datetime import datetime
+
+from textual.widgets import RichLog
 
 from radiotui.core.models import Channel, DemodMode
 from radiotui.export import export_channels, export_path_for
@@ -63,9 +67,6 @@ def test_export_path_naming(tmp_path):
 
 def test_cli_scan_export_writes_on_exit(tmp_path):
     """End-to-end: sim sweep with --seconds expiry must leave a file behind."""
-    import subprocess
-    import sys
-
     target = tmp_path / "findings.csv"
     subprocess.run(
         [
@@ -93,8 +94,6 @@ def test_cli_scan_export_writes_on_exit(tmp_path):
 
 
 async def test_tui_e_key_exports_and_logs(tmp_path):
-    from textual.widgets import RichLog
-
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)

@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 
-from radiotui.config import BANDS, Settings
+from radiotui.config import BANDS, Settings, band_by_name
 from radiotui.config_file import (
     ConfigError,
     apply_config_to_settings,
@@ -121,8 +121,6 @@ def test_user_band_registers_and_is_reachable(cfg_path):
     registered = register_user_bands(data, cfg_path)
     try:
         assert registered == ["local_repeaters"]
-        from radiotui.config import band_by_name
-
         band = band_by_name("local_repeaters")
         assert band.start_hz == 145_600_000
         assert sorted(BANDS).index("local_repeaters") >= 0  # gets a number key slot

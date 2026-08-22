@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from textual.widgets import Static
 
 from radiotui.cli import render_scan
+from radiotui.core.models import DemodMode
 from radiotui.tui.app import RadioTuiApp
 
 
@@ -57,8 +58,6 @@ async def test_meter_resets_peak_after_monitor_stops():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
-        from radiotui.core.models import DemodMode
-
         app.start_monitor(100e6, DemodMode.WFM, muted=True, enable_recorder=False)
         app.post_message(RadioTuiApp.RssiUpdate(-15))
         await pilot.pause(0.3)

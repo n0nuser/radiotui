@@ -83,13 +83,14 @@ class Sweeper:
         return None
 
     def _run(self) -> None:
-        samples_per_hop = max(
-            int(self._plan.sample_rate_hz * self._settings.hop_dwell_s),
-            self._plan.fft_size * 4,
-        )
         dc_mask_hz = self._plan.sample_rate_hz * 0.03 if self._device.is_real else 0.0
         while not self._stop.is_set():
             t0 = time.time()
+            # Recomputed every sweep so runtime dwell changes apply live
+            samples_per_hop = max(
+                int(self._plan.sample_rate_hz * self._settings.hop_dwell_s),
+                self._plan.fft_size * 4,
+            )
             hops = []
             for center in self._plan.hop_centers_hz:
                 if self._stop.is_set():

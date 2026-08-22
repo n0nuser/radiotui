@@ -17,10 +17,14 @@ from rich.text import Text
 from radiotui.antenna.advisor import analyze, format_report
 from radiotui.config import (
     BANDS,
+    DWELL_RANGE_S,
+    MIN_SNR_RANGE,
+    THRESHOLD_MARGIN_RANGE,
     Band,
     Settings,
     band_by_name,
     band_needs_hf,
+    clamp,
     effective_sample_rate,
     enable_hf,
     freq_needs_hf,
@@ -36,31 +40,15 @@ from radiotui.config_file import (
 )
 from radiotui.core.models import DemodMode
 from radiotui.dsp.spectrum import SweepPlan
+from radiotui.export import export_channels
 from radiotui.scanner.monitor import ChannelMonitor, auto_hold_release_reason
 from radiotui.scanner.sweeper import Sweeper
 from radiotui.sdr.base import SdrDevice
 from radiotui.sdr.manager import OpenedDevice, describe_devices, open_device
+from radiotui.tui.app import run_tui
+from radiotui.tuning import guess_demod, parse_freq
 
 console = Console()
-
-
-def parse_freq(value: str) -> float:
-    v = value.strip().lower().replace(" ", "")
-    multipliers = {"ghz": 1e9, "mhz": 1e6, "m": 1e6, "khz": 1e3, "k": 1e3, "hz": 1.0}
-    for suffix, mult in sorted(multipliers.items(), key=lambda kv: -len(kv[0])):
-        if v.endswith(suffix):
-            return float(v[: -len(suffix)]) * mult
-    try:
-        return float(v)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"cannot parse frequency '{value}'") from None
-
-
-def guess_demod(freq_hz: float) -> DemodMode:
-    for band in BANDS.values():
-        if band.start_hz <= freq_hz <= band.end_hz:
-            return band.demod
-    return DemodMode.NFM
 
 
 def resolve_band(args) -> Band:
@@ -138,10 +126,10 @@ def common_options() -> argparse.ArgumentParser:
 
 def apply_flag_defaults(args: argparse.Namespace) -> argparse.Namespace:
     """Resolve defaults for flags defined with ``SUPPRESS`` exactly once."""
-    args.sim = getattr(args, "sim", False)
-    args.bias_tee = getattr(args, "bias_tee", False)
-    args.ppm = getattr(args, "ppm", 0) or 0
-    args.offset_tune = getattr(args, "offset_tune", False)
+    args.sim = args.sim if hasattr(args, "sim") else False
+    args.bias_tee = args.bias_tee if hasattr(args, "bias_tee") else False
+    args.ppm = args.ppm if hasattr(args, "ppm") else 0
+    args.offset_tune = args.offset_tune if hasattr(args, "offset_tune") else False
     return args
 
 
@@ -205,6 +193,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="write discovered channels to PATH on exit (.csv or .json)",
     )
+    p_scan.add_argument(
+        "--threshold-margin",
+        type=float,
+        metavar="DB",
+        default=None,
+        help="detection threshold above noise floor in dB (0-40)",
+    )
+    p_scan.add_argument(
+        "--min-snr",
+        type=float,
+        metavar="DB",
+        default=None,
+        help="minimum SNR for a channel to count (0-30)",
+    )
+    p_scan.add_argument(
+        "--dwell",
+        type=float,
+        metavar="S",
+        default=None,
+        help="hop dwell time in seconds (0.02-1.0)",
+    )
 
     p_listen = sub.add_parser(
         "listen", parents=[common_options()], help="tune a frequency and play audio"
@@ -252,9 +261,24 @@ def cmd_devices(_args) -> None:
         console.print(f"[green]•[/green] {entry}")
 
 
+def apply_scan_tuning(settings: Settings, args) -> None:
+    """Headless squelch controls (#17): flags override config-file values."""
+    scanner = settings.scanner
+    if args.threshold_margin is not None:
+        lo, hi = THRESHOLD_MARGIN_RANGE
+        scanner.threshold_margin_db = clamp(args.threshold_margin, lo, hi)
+    if args.min_snr is not None:
+        lo, hi = MIN_SNR_RANGE
+        scanner.min_snr_db = clamp(args.min_snr, lo, hi)
+    if args.dwell is not None:
+        lo, hi = DWELL_RANGE_S
+        scanner.hop_dwell_s = clamp(args.dwell, lo, hi)
+
+
 def cmd_scan(args) -> None:
     band = resolve_band(args)
-    settings = getattr(args, "_settings", None) or Settings()
+    settings = args._settings  # main() always provides the merged settings
+    apply_scan_tuning(settings, args)
     settings.scanner.autonomous = args.autonomous
     device = open_device_or_exit(args.sim)
     apply_hw_options(device, args)
@@ -311,15 +335,13 @@ def cmd_scan(args) -> None:
 
 
 def _export_sweep(channels, path_str: str, band: Band, settings, sweeper) -> Path:
-    from radiotui.export import export_channels
-
     context = {
         "band": band.label,
         "start_hz": band.start_hz,
         "end_hz": band.end_hz,
         "gain_db": settings.scanner.gain_db,
         "sample_rate_hz": effective_sample_rate(settings.scanner),
-        "sweeps_completed": getattr(sweeper, "sweeps_done", 0),
+        "sweeps_completed": sweeper.sweeps_done,
     }
     return export_channels(channels, path_str, context=context)
 
@@ -388,7 +410,7 @@ def render_scan(state, simulated: bool = False) -> Table:
 
 
 def run_monitor(args, freq: float):
-    settings = getattr(args, "_settings", None) or Settings()
+    settings = args._settings  # main() always provides the merged settings
     demod = DemodMode(args.demod) if args.demod else guess_demod(freq)
     device = open_device_or_exit(args.sim)
     apply_hw_options(device, args)
@@ -453,7 +475,7 @@ def cmd_antenna(args) -> None:
 
 
 def cmd_tuner(args) -> None:
-    settings = getattr(args, "_settings", None) or Settings()
+    settings = args._settings  # main() always provides the merged settings
     demod = DemodMode(args.demod) if args.demod else guess_demod(args.freq)
     device = open_device_or_exit(args.sim)
     monitor = ChannelMonitor(device, args.freq, demod, settings, muted=True)
@@ -528,6 +550,17 @@ COMMANDS = {
 }
 
 
+def resolve_args(argv: list[str], data: dict) -> argparse.Namespace:
+    """Parse, then merge in precedence order: defaults <- config file <- flags.
+
+    Config values only fill flags the user did not type (SUPPRESS keeps those
+    absent), so this must run BEFORE apply_flag_defaults resolves the rest.
+    """
+    args = build_parser().parse_args(argv)
+    apply_hardware_defaults(args, data)
+    return apply_flag_defaults(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:]) if argv is None else list(argv)
     use_config = "--no-config" not in argv
@@ -541,19 +574,15 @@ def main(argv: list[str] | None = None) -> int:
             console.print(f"[red]Config error:[/] {exc}")
             return 2
 
-    parser = build_parser()
-    args = apply_flag_defaults(parser.parse_args(argv))
-    if args.command == "config":
-        return cmd_config(args)
     try:
-        apply_hardware_defaults(args, data)
+        args = resolve_args(argv, data)
     except ConfigError as exc:
         console.print(f"[red]Config error:[/] {exc}")
         return 2
+    if args.command == "config":
+        return cmd_config(args)
     args._settings = runtime_settings(args, data)
     if not args.command or args.command == "tui":
-        from radiotui.tui.app import run_tui
-
         return run_tui(
             force_sim=args.sim,
             bias_tee=args.bias_tee,

@@ -68,6 +68,15 @@ class ScannerSettings:
     max_hold_s: float = 120.0
 
 
+THRESHOLD_MARGIN_RANGE = (0.0, 40.0)
+MIN_SNR_RANGE = (0.0, 30.0)
+DWELL_RANGE_S = (0.02, 1.0)
+
+
+def clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
 @dataclass
 class AudioSettings:
     output_rate_hz: int = 48_000

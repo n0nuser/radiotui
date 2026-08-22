@@ -67,19 +67,19 @@ async def test_comma_toggles_peak_sort_with_header_marker():
         assert "▾" in str(table.columns["freq"].label)
 
 
-async def test_rows_update_in_place_without_rebuild():
+async def test_rows_update_in_place_without_rebuild(monkeypatch):
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
         table = app.query_one("#channels", DataTable)
         rebuilds = []
-        original_clear = table.clear
+        original_clear = DataTable.clear
 
         def counting_clear(*args, **kwargs):
             rebuilds.append(1)
             return original_clear(*args, **kwargs)
 
-        table.clear = counting_clear  # type: ignore[method-assign]
+        monkeypatch.setattr(DataTable, "clear", counting_clear)
         channels = {
             101.0e6: make_channel(101.0e6, -20),
             98.0e6: make_channel(98.0e6, -40),

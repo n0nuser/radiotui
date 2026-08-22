@@ -6,11 +6,13 @@ import time
 
 import numpy as np
 import pytest
+from textual.widgets import RichLog
 
 from radiotui.audio.recorder import VoxRecorder
 from radiotui.config import AudioSettings, ScannerSettings
 from radiotui.core.models import DemodMode, HoldRequest
 from radiotui.dsp.spectrum import SweepPlan
+from radiotui.scanner.monitor import auto_hold_release_reason
 from radiotui.scanner.sweeper import Sweeper
 from radiotui.sdr.simulator import SimCarrier, SimulatedDevice
 from radiotui.tui.app import RadioTuiApp
@@ -145,14 +147,10 @@ MAX_HOLD_S = 120.0
     ],
 )
 def test_auto_hold_release_reason_paths(silent_for, expected):
-    from radiotui.scanner.monitor import auto_hold_release_reason
-
     assert auto_hold_release_reason(silent_for, HOLD_RELEASE_S) == expected
 
 
 async def _hold_log_line(app) -> str:
-    from textual.widgets import RichLog
-
     log = app.query_one("#log", RichLog)
     for line in reversed(log.lines):
         if "releasing" in line.text:

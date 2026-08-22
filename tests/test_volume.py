@@ -1,6 +1,7 @@
 """Issue #19: live volume control, warm mute, visible audio-backend failure."""
 
 import numpy as np
+from textual.widgets import Static
 
 from radiotui.audio.demod import scale_pcm16
 from radiotui.config import Settings, clamp_volume_db
@@ -101,8 +102,6 @@ def test_playback_volume_applies_only_to_player_path():
 
 
 async def test_volume_keys_adjust_level_and_status_shows_it():
-    from textual.widgets import Static
-
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)

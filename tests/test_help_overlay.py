@@ -1,6 +1,7 @@
 """Issue #11: `?` help overlay listing every binding and band key."""
 
 from textual.binding import Binding
+from textual.widgets import Static
 
 from radiotui.config import BANDS
 from radiotui.tui.app import HelpModal, RadioTuiApp, build_help_text
@@ -29,8 +30,6 @@ async def test_question_mark_opens_and_escape_closes():
         await pilot.press("?")
         await pilot.pause(0.2)
         assert isinstance(app.screen, HelpModal)
-        from textual.widgets import Static
-
         rendered = str(app.screen.query_one(Static).render())
         assert "FM Broadcast" in rendered
         await pilot.press("escape")

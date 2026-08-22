@@ -167,7 +167,7 @@ def apply_hardware_defaults(args, data: dict[str, Any]) -> None:
     hw = data.get("hardware") or {}
     for key in hw:
         if key not in _HW_KEYS:
-            raise ConfigError(f"unknown key '[hardware]' '{key}' in {config_path()}")
+            raise _key_error(config_path(), "unknown key '[hardware]'", key)
     ppm = hw.get("ppm")
     if isinstance(ppm, bool) or (ppm is not None and not isinstance(ppm, int)):
         raise ConfigError("'[hardware] ppm' must be an integer")
@@ -175,22 +175,22 @@ def apply_hardware_defaults(args, data: dict[str, Any]) -> None:
     if gain is not None and isinstance(gain, bool):
         raise ConfigError("'[hardware] gain_db' must be a number")
 
-    if getattr(args, "ppm", None) is None and ppm is not None:
-        args.ppm = int(ppm)
-    if getattr(args, "bias_tee", None) is None and hw.get("bias_tee") is not None:
-        args.bias_tee = bool(hw["bias_tee"])
-    if getattr(args, "offset_tune", None) is None and hw.get("offset_tune") is not None:
-        args.offset_tune = bool(hw["offset_tune"])
     args._hw_gain_db = None if gain is None else float(gain)
+    if not hasattr(args, "ppm") and ppm is not None:
+        args.ppm = int(ppm)
+    if not hasattr(args, "bias_tee") and hw.get("bias_tee") is not None:
+        args.bias_tee = bool(hw["bias_tee"])
+    if not hasattr(args, "offset_tune") and hw.get("offset_tune") is not None:
+        args.offset_tune = bool(hw["offset_tune"])
 
 
 def runtime_settings(args, data: dict[str, Any]) -> Settings:
     """Settings for this run: defaults <- config file <- CLI scanner flags."""
     settings = Settings()
     apply_config_to_settings(settings, data)
-    gain = getattr(args, "gain", None)
+    gain = args.gain if hasattr(args, "gain") else None
     if gain is None:
-        gain = getattr(args, "_hw_gain_db", None)
+        gain = args._hw_gain_db
     if gain is not None:
         settings.scanner.gain_db = float(gain)
     return settings

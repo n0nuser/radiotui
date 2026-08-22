@@ -1,6 +1,7 @@
 """Issue #12: arbitrary frequency / range entry from the TUI (`f` key)."""
 
 import pytest
+from textual.widgets import Static
 
 from radiotui.core.models import DemodMode
 from radiotui.tui.app import RadioTuiApp, TuneModal, parse_tune_request
@@ -68,8 +69,6 @@ async def test_escape_cancels():
 
 
 async def test_bad_input_shows_inline_error_and_keeps_sweep():
-    from textual.widgets import Static
-
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
@@ -100,8 +99,6 @@ async def test_range_sweeps_custom_band():
         assert app.band_name == "custom"
         assert app.band_label == "430-440 MHz"
         assert all(430e6 <= hz <= 440e6 for hz in app.plan.hop_centers_hz)
-        from textual.widgets import Static
-
         meter = str(app.query_one("#meter", Static).render())
         assert "430-440 MHz" in meter
 

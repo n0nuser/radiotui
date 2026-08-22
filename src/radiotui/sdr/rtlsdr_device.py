@@ -11,11 +11,16 @@ apply_librtlsdr_compat()
 
 try:
     from rtlsdr import RtlSdr
+    from rtlsdr.librtlsdr import librtlsdr
 
     _HAS_RTLSDR = True
     _IMPORT_ERROR = ""
-except Exception as exc:  # missing package, or an unusable binding/library pair
-    RtlSdr = None  # type: ignore[assignment]
+# Binding import can fail in distinct ways: missing module (ImportError),
+# librtlsdr API drift (AttributeError from ctypes symbol lookup), or an
+# unloadable shared library (OSError).
+except (ImportError, AttributeError, OSError) as exc:
+    RtlSdr = None  # type: ignore[assignment] — sentinel for unavailable binding
+    librtlsdr = None  # type: ignore[assignment] — same sentinel
     _HAS_RTLSDR = False
     _IMPORT_ERROR = str(exc)
 
@@ -112,8 +117,6 @@ class RtlSdrDevice(SdrDevice):
     def set_offset_tuning(self, enabled: bool) -> bool:
         assert self._sdr is not None
         try:
-            from rtlsdr.librtlsdr import librtlsdr
-
             result = librtlsdr.rtlsdr_set_offset_tuning(self._sdr.dev_p, 1 if enabled else 0)
             return result == 0
         except (AttributeError, OSError, RuntimeError, ValueError):

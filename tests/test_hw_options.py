@@ -3,7 +3,9 @@
 import numpy as np
 import pytest
 
+from radiotui.cli import apply_flag_defaults, build_parser
 from radiotui.config import (
+    HF_SAMPLE_RATE_HZ,
     ScannerSettings,
     band_by_name,
     band_needs_hf,
@@ -30,8 +32,6 @@ def test_freq_needs_hf_boundary():
 
 
 def test_effective_sample_rate_clamps_to_direct_sampling_clock():
-    from radiotui.config import HF_SAMPLE_RATE_HZ
-
     scanner = ScannerSettings(sample_rate_hz=1_024_000.0)
     assert effective_sample_rate(scanner) == 1_024_000.0
     assert scanner.sample_rate_hz == 1_024_000.0
@@ -93,7 +93,6 @@ def test_base_class_defaults_are_safe_noops():
     ],
 )
 def test_cli_hw_flags_on_all_commands(command, extra):
-    from radiotui.cli import apply_flag_defaults, build_parser
 
     args = apply_flag_defaults(build_parser().parse_args([command, "--bias-tee"] + extra))
     assert args.bias_tee
@@ -131,7 +130,6 @@ def test_cli_hw_flags_on_all_commands(command, extra):
 )
 def test_cli_flags_work_in_both_positions(command, extra, flags, check, position):
     """Issue #9: every common flag must work before AND after the subcommand."""
-    from radiotui.cli import apply_flag_defaults, build_parser
 
     tail = [command] + extra
     argv = flags + tail if position == "before" else tail + flags
@@ -140,7 +138,6 @@ def test_cli_flags_work_in_both_positions(command, extra, flags, check, position
 
 
 def test_cli_flag_defaults_resolved_once():
-    from radiotui.cli import apply_flag_defaults, build_parser
 
     args = apply_flag_defaults(build_parser().parse_args(["scan", "--band", "pmr446"]))
     assert not args.sim
@@ -150,14 +147,12 @@ def test_cli_flag_defaults_resolved_once():
 
 
 def test_cli_main_parser_accepts_hw_flags():
-    from radiotui.cli import apply_flag_defaults, build_parser
 
     args = apply_flag_defaults(build_parser().parse_args(["--bias-tee"]))
     assert args.bias_tee
 
 
 def test_cli_scan_has_autonomous_flag():
-    from radiotui.cli import build_parser
 
     args = build_parser().parse_args(["scan", "--autonomous", "--band", "pmr446"])
     assert args.autonomous
