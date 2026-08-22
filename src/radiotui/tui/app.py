@@ -272,6 +272,7 @@ class RadioTuiApp(App):
         self.last_state: ScanState | None = None
         self.last_rssi: float | None = None
         self._peak_rssi: float = -120.0
+        self._ignore_rssi = False
         self.user_channels = UserChannels()
 
     def compose(self) -> ComposeResult:
@@ -653,6 +654,7 @@ class RadioTuiApp(App):
         if pause_sweep:
             self._pause_sweeper_for_monitor()
         self.muted = muted
+        self._ignore_rssi = False
         monitor = ChannelMonitor(self.device, freq_hz, demod, self.settings, muted=muted)
         monitor.recorder.enabled = enable_recorder
         monitor.recorder.on_clip_end = self.on_clip_end
@@ -675,6 +677,7 @@ class RadioTuiApp(App):
 
     def stop_monitor(self, resume_sweep: bool = True) -> None:
         if self.monitor is not None:
+            self._ignore_rssi = True  # the stopping thread may still post readings
             self.monitor.stop()
             self.monitor = None
             self.last_rssi = None
@@ -882,6 +885,8 @@ class RadioTuiApp(App):
 
     @on(RssiUpdate)
     def on_rssi_update(self, message: RadioTuiApp.RssiUpdate) -> None:
+        if self._ignore_rssi:
+            return  # stale reading from a monitor that was just stopped
         self.last_rssi = message.rssi_dbfs
         self._peak_rssi = max(self._peak_rssi * 0.995, message.rssi_dbfs)
         self.refresh_status()
