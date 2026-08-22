@@ -5,14 +5,19 @@ from __future__ import annotations
 import numpy as np
 
 from radiotui.sdr.base import DeviceUnavailable, SdrDevice
+from radiotui.sdr.rtlsdr_compat import apply_librtlsdr_compat
+
+apply_librtlsdr_compat()
 
 try:
     from rtlsdr import RtlSdr
 
     _HAS_RTLSDR = True
-except Exception:
-    RtlSdr = None
+    _IMPORT_ERROR = ""
+except Exception as exc:  # missing package, or an unusable binding/library pair
+    RtlSdr = None  # type: ignore[assignment]
     _HAS_RTLSDR = False
+    _IMPORT_ERROR = str(exc)
 
 
 class RtlSdrDevice(SdrDevice):
@@ -22,7 +27,10 @@ class RtlSdrDevice(SdrDevice):
 
     def __init__(self, device_index: int = 0) -> None:
         if not _HAS_RTLSDR:
-            raise DeviceUnavailable("pyrtlsdr is not installed (uv sync --extra sdr)")
+            detail = f" ({_IMPORT_ERROR})" if _IMPORT_ERROR else ""
+            raise DeviceUnavailable(
+                f"pyrtlsdr is not usable{detail} (install with: uv sync --extra sdr)"
+            )
         self._index = device_index
         self._sdr: RtlSdr | None = None
 
