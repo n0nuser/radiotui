@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import queue
 import time
 
@@ -12,11 +13,13 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, RichLog, Static
+from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
 
 from radiotui.antenna.advisor import analyze, format_report
+from radiotui.cli import guess_demod, parse_freq
 from radiotui.config import (
     BANDS,
+    Band,
     Settings,
     band_needs_hf,
     effective_sample_rate,
@@ -86,6 +89,69 @@ class HelpModal(ModalScreen):
         yield Static(build_help_text(), id="help-report")
 
 
+def _token_to_hz(token: str) -> float:
+    """Bare numbers mean MHz; anything else goes through the CLI's parse_freq."""
+    try:
+        return float(token) * 1e6
+    except ValueError:
+        pass
+    try:
+        return parse_freq(token)
+    except argparse.ArgumentTypeError as exc:
+        raise ValueError(str(exc)) from None
+
+
+def parse_tune_request(text: str) -> tuple[float, float | None, DemodMode]:
+    """Parse a tune entry: '145.5', '430-440', optional ' nfm|wfm|am' demod suffix.
+
+    Returns ``(freq_hz, None, demod)`` for a single frequency or
+    ``(start_hz, end_hz, demod)`` for a range.
+    """
+    parts = text.strip().lower().split()
+    if len(parts) == 2 and parts[1] in {d.value for d in DemodMode}:
+        demod = DemodMode(parts[1])
+        spec = parts[0]
+    elif len(parts) == 1:
+        demod = None
+        spec = parts[0] if parts else ""
+    else:
+        raise ValueError(f"cannot parse '{text.strip()}'")
+    if not spec:
+        raise ValueError("enter a frequency or a start-end range")
+    if "-" in spec:
+        lo, _, hi = spec.partition("-")
+        try:
+            start_hz, end_hz = _token_to_hz(lo), _token_to_hz(hi)
+        except ValueError:
+            raise ValueError(f"cannot parse range '{spec}'") from None
+        if end_hz <= start_hz:
+            raise ValueError(f"end of range must be above start in '{spec}'")
+        return start_hz, end_hz, demod
+    return _token_to_hz(spec), None, demod
+
+
+class TuneModal(ModalScreen):
+    BINDINGS = [Binding("escape", "dismiss", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Input(
+                placeholder="145.5 · 430-440 · 96.9 wfm · esc cancels",
+                id="tune-input",
+            ),
+            Static("", id="tune-error"),
+            id="tune-box",
+        )
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        try:
+            start_hz, end_hz, demod = parse_tune_request(event.value)
+        except ValueError as exc:
+            self.query_one("#tune-error", Static).update(f"[red]{exc}[/red]")
+            return
+        self.dismiss((start_hz, end_hz, demod))
+
+
 class AntennaModal(ModalScreen):
     BINDINGS = [Binding("q,escape", "dismiss", "Close")]
 
@@ -113,10 +179,12 @@ class RadioTuiApp(App):
     #antenna-report { width: 64; border: thick cyan; padding: 1 2; background: $surface; }
     HelpModal { align: center middle; background: #000000cc; }
     #help-report { width: 72; border: thick cyan; padding: 1 2; background: $surface; }
+    TuneModal { align: center middle; background: #000000cc; }
+    #tune-box { width: 60; border: thick cyan; padding: 1 2; background: $surface; }
     """
     BINDINGS = [
         Binding("s", "toggle_sweep", "Sweep"),
-        Binding("enter", "listen", "Listen", priority=True),
+        Binding("enter", "listen", "Listen"),
         Binding("l", "stop_listen", "Stop"),
         Binding("m", "mute", "Mute"),
         Binding("r", "record", "Record"),
@@ -129,6 +197,7 @@ class RadioTuiApp(App):
         Binding("less_than_sign", "volume_down", "Vol-", key_display="<", show=False),
         Binding("a", "antenna", "Antenna"),
         Binding("o", "toggle_autonomous", "Auto"),
+        Binding("f", "tune", "Freq"),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit", priority=True),
     ]
@@ -175,6 +244,7 @@ class RadioTuiApp(App):
         self.resume_sweep_after_listen = False
         self.queue: queue.Queue[ScanState] = queue.Queue(maxsize=4)
         self.band_name = "fm_broadcast"
+        self.band_label = BANDS["fm_broadcast"].label
         self.gain_db: float | None = None
         self.muted = False
         self.clips_saved = 0
@@ -252,8 +322,11 @@ class RadioTuiApp(App):
         self.start_band(self.band_name)
 
     def start_band(self, band_name: str) -> None:
-        band = BANDS[band_name]
-        self.band_name = band_name
+        self._start_sweep(BANDS[band_name], band_name)
+
+    def _start_sweep(self, band: Band, name: str | None = None) -> None:
+        self.band_name = name or "custom"
+        self.band_label = band.label
         if self.sweeper is not None:
             self.sweeper.stop()
         waterfall = self.query_one("#waterfall", Waterfall)
@@ -392,7 +465,7 @@ class RadioTuiApp(App):
     def refresh_status(self) -> None:
         meter = self.query_one("#meter", Static)
         parts = [
-            f"band {self.band_name}",
+            f"band {self.band_label}",
             f"sweeps {self.sweeper.sweeps_done if self.sweeper else 0}",
         ]
         if self.last_state:
@@ -471,7 +544,15 @@ class RadioTuiApp(App):
             self.sweeper.stop()
             time.sleep(0.05)
 
+    @on(DataTable.RowSelected)
+    def on_row_selected(self, event: DataTable.RowSelected) -> None:
+        # enter is not a priority binding (so inputs can receive it); the
+        # table's own select action fires RowSelected, which we listen to.
+        self.action_listen()
+
     def action_listen(self) -> None:
+        if len(self.screen_stack) > 1:
+            return  # a modal owns the keyboard (priority bindings fire before it)
         channel = self.selected_channel()
         if channel is None:
             self.log_line("[yellow]No channel selected.[/yellow]")
@@ -660,6 +741,30 @@ class RadioTuiApp(App):
 
     def action_help(self) -> None:
         self.push_screen(HelpModal())
+
+    def action_tune(self) -> None:
+        self.push_screen(TuneModal(), self._apply_tune_request)
+
+    def _apply_tune_request(self, request) -> None:
+        if request is None:
+            return
+        start_hz, end_hz, demod = request
+        if end_hz is None:
+            self.listen_frequency(start_hz, demod)
+        else:
+            self.sweep_range(start_hz, end_hz, demod)
+
+    def listen_frequency(self, freq_hz: float, demod: DemodMode | None = None) -> None:
+        """Tune straight to a known frequency and listen, bypassing the detector."""
+        self.start_monitor(
+            freq_hz, demod or guess_demod(freq_hz), muted=False, enable_recorder=False
+        )
+
+    def sweep_range(self, start_hz: float, end_hz: float, demod: DemodMode | None = None) -> None:
+        """Sweep an arbitrary range; sub-24 MHz switches to HF direct sampling."""
+        demod = demod or guess_demod((start_hz + end_hz) / 2)
+        label = f"{start_hz / 1e6:g}-{end_hz / 1e6:g} MHz"
+        self._start_sweep(Band("custom", label, start_hz, end_hz, demod))
 
     @on(RssiUpdate)
     def on_rssi_update(self, message: RadioTuiApp.RssiUpdate) -> None:
