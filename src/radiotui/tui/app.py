@@ -16,6 +16,16 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
 
 from radiotui.antenna.advisor import analyze, format_report
+from radiotui.channels_file import (
+    DEFAULT_IGNORE_WIDTH_HZ,
+    Bookmark,
+    IgnoreEntry,
+    UserChannels,
+    add_ignore,
+    load_user_channels,
+    save_user_channels,
+    upsert_bookmark,
+)
 from radiotui.config import (
     BANDS,
     DWELL_RANGE_S,
@@ -134,6 +144,27 @@ class AntennaModal(ModalScreen):
         yield Static(self._text, id="antenna-report")
 
 
+class NameModal(ModalScreen):
+    """Text input for naming a bookmarked channel; esc cancels."""
+
+    BINDINGS = [Binding("escape", "dismiss", "Cancel")]
+
+    def __init__(self, hint: str, initial: str = "", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._hint = hint
+        self._initial = initial
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Input(value=self._initial, placeholder="name · enter saves · esc cancels"),
+            Static(self._hint, id="name-hint"),
+            id="name-box",
+        )
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip())
+
+
 class RadioTuiApp(App):
     TITLE = "radiotui"
     SUB_TITLE = "autonomous spectrum scanner"
@@ -152,6 +183,9 @@ class RadioTuiApp(App):
     #help-report { width: 72; border: thick cyan; padding: 1 2; background: $surface; }
     TuneModal { align: center middle; background: #000000cc; }
     #tune-box { width: 60; border: thick cyan; padding: 1 2; background: $surface; }
+    NameModal { align: center middle; background: #000000cc; }
+    #name-box { width: 60; border: thick magenta; padding: 1 2; background: $surface; }
+    #name-hint { color: $text-muted; padding-top: 1; }
     """
     BINDINGS = [
         Binding("s", "toggle_sweep", "Sweep"),
@@ -174,6 +208,8 @@ class RadioTuiApp(App):
         Binding("o", "toggle_autonomous", "Auto"),
         Binding("e", "export_channels", "Export"),
         Binding("f", "tune", "Freq"),
+        Binding("b", "bookmark", "Name"),
+        Binding("x", "ignore_channel", "Ignore"),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit", priority=True),
     ]
@@ -202,12 +238,14 @@ class RadioTuiApp(App):
         ppm: int = 0,
         offset_tune: bool = False,
         settings: Settings | None = None,
+        channels_path: Path | None = None,
     ) -> None:
         super().__init__()
         self._force_sim = force_sim
         self._bias_tee_requested = bias_tee
         self._ppm_requested = ppm
         self._offset_tune_requested = offset_tune
+        self._channels_path = channels_path
         self.bias_tee_on = False
         self.hf_active = False
         self.auto_hold_freq: float | None = None
@@ -233,6 +271,7 @@ class RadioTuiApp(App):
         self.last_state: ScanState | None = None
         self.last_rssi: float | None = None
         self._peak_rssi: float = -120.0
+        self.user_channels = UserChannels()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -249,6 +288,7 @@ class RadioTuiApp(App):
         self.set_interval(0.15, self.poll_queue)
         table = self.query_one("#channels", DataTable)
         for key, label, width in (
+            ("name", "Name", 14),
             ("freq", "Freq MHz", 11),
             ("bw", "BW kHz", 8),
             ("peak", "Peak dB", 9),
@@ -259,6 +299,10 @@ class RadioTuiApp(App):
         ):
             table.add_column(label, key=key, width=width)
         self._apply_sort_markers()
+
+        self.user_channels, channels_warning = load_user_channels(self._channels_path)
+        if channels_warning:
+            self.log_line(f"[yellow]channels file ignored:[/] {channels_warning}")
 
         try:
             opened = open_device(prefer_real=not self._force_sim)
@@ -323,6 +367,7 @@ class RadioTuiApp(App):
             self.settings.scanner.fft_size,
         )
         self.sweeper = Sweeper(self.device, self.plan, self.settings.scanner, self.queue)
+        self.sweeper.set_user_channels(self.user_channels)
         self.sweeper.start()
         self.log_line(
             f"Sweeping [bold]{band.label}[/bold] ({len(self.plan.hop_centers_hz)} hops)"
@@ -393,11 +438,12 @@ class RadioTuiApp(App):
             except ValueError:
                 pass
 
-    COLUMN_KEYS = ("freq", "bw", "peak", "snr", "hits", "demod", "age")
+    COLUMN_KEYS = ("name", "freq", "bw", "peak", "snr", "hits", "demod", "age")
 
     @staticmethod
     def _row_cells(ch: Channel, now: float) -> tuple[str, ...]:
         return (
+            ch.name,
             f"{ch.center_hz / 1e6:.4f}",
             f"{ch.bandwidth_hz / 1e3:.0f}",
             f"{ch.peak_db:.1f}",
@@ -759,6 +805,53 @@ class RadioTuiApp(App):
 
     def action_tune(self) -> None:
         self.push_screen(TuneModal(), self._apply_tune_request)
+
+    def action_bookmark(self) -> None:
+        channel = self.selected_channel()
+        if channel is None:
+            self.log_line("[yellow]Select a channel to name.[/yellow]")
+            return
+        hint = f"{channel.center_hz / 1e6:.4f} MHz ({channel.demod.value})"
+        self.push_screen(
+            NameModal(hint, channel.name),
+            lambda name: self._save_bookmark(channel.center_hz, channel.demod, name),
+        )
+
+    def _save_bookmark(self, freq_hz: float, demod: DemodMode, name: str | None) -> None:
+        if not name:
+            self.log_line("Bookmark cancelled")
+            return
+        replaced = upsert_bookmark(self.user_channels, Bookmark(freq_hz, name, demod))
+        verb = "updated bookmark" if replaced else "bookmarked"
+        self.log_line(f"[green]{verb}[/green] {freq_hz / 1e6:.4f} MHz as '{name}'")
+        self._apply_user_channels()
+        # Annotate immediately; the tracker would otherwise wait a frame.
+        for channel in self._last_channels:
+            channel.name = self.user_channels.name_for(channel.center_hz)
+        if self._last_channels:
+            self.refresh_table(self._last_channels)
+
+    def action_ignore_channel(self) -> None:
+        channel = self.selected_channel()
+        if channel is None:
+            self.log_line("[yellow]Select a channel to ignore.[/yellow]")
+            return
+        width_hz = max(DEFAULT_IGNORE_WIDTH_HZ, channel.bandwidth_hz)
+        add_ignore(self.user_channels, IgnoreEntry(channel.center_hz, width_hz))
+        self.log_line(
+            f"[green]ignored[/green] {channel.center_hz / 1e6:.4f} MHz "
+            f"(±{width_hz / 2 / 1e3:.0f} kHz) - it will drop off the table"
+        )
+        self._apply_user_channels()
+
+    def _apply_user_channels(self) -> None:
+        """Persist the book and push it into the running sweep."""
+        try:
+            save_user_channels(self.user_channels, self._channels_path)
+        except OSError as exc:
+            self.log_line(f"[red]cannot save channels file: {exc}[/red]")
+        if self.sweeper is not None:
+            self.sweeper.set_user_channels(self.user_channels)
 
     def _apply_tune_request(self, request) -> None:
         if request is None:

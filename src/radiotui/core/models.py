@@ -34,6 +34,7 @@ class Channel:
     hits: int = 1
     misses: int = 0
     active: bool = False
+    name: str = ""
 
     def age_seconds(self, now: float | None = None) -> float:
         return (now if now is not None else time.time()) - self.last_seen

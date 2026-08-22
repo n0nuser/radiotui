@@ -11,6 +11,7 @@ from radiotui.core.models import Channel
 
 _CSV_FIELDS = (
     "center_hz",
+    "name",
     "bandwidth_hz",
     "peak_db",
     "snr_db",
@@ -60,6 +61,7 @@ def export_channels(
 def _channel_dict(channel: Channel) -> dict:
     return {
         "center_hz": float(channel.center_hz),
+        "name": channel.name,
         "bandwidth_hz": float(channel.bandwidth_hz),
         "peak_db": round(float(channel.peak_db), 1),
         "snr_db": round(float(channel.snr_db), 1),

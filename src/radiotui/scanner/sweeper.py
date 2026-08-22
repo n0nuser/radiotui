@@ -8,6 +8,7 @@ import time
 
 import numpy as np
 
+from radiotui.channels_file import UserChannels
 from radiotui.config import ScannerSettings
 from radiotui.core.models import HoldRequest, ScanState, SpectrumFrame
 from radiotui.dsp.detector import ChannelTracker, NoiseFloorEstimator, extract_peaks
@@ -44,6 +45,10 @@ class Sweeper:
     @property
     def channels(self):
         return self._tracker.active_channels()
+
+    def set_user_channels(self, user_channels: UserChannels) -> None:
+        """Live-apply bookmarks (names) and ignores (birdie silencing)."""
+        self._tracker.set_user_channels(user_channels)
 
     @property
     def running(self) -> bool:

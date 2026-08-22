@@ -15,6 +15,7 @@ from rich.table import Table
 from rich.text import Text
 
 from radiotui.antenna.advisor import analyze, format_report
+from radiotui.channels_file import load_user_channels
 from radiotui.config import (
     BANDS,
     DWELL_RANGE_S,
@@ -293,6 +294,10 @@ def cmd_scan(args) -> None:
         settings.scanner.fft_size,
     )
     sweeper = Sweeper(device, plan, settings.scanner, out)
+    user_channels, channels_warning = load_user_channels()
+    if channels_warning:
+        console.print(f"[yellow]channels file ignored:[/] {channels_warning}")
+    sweeper.set_user_channels(user_channels)
     sweeper.start()
     console.print(
         f"Sweeping [bold]{band.label}[/bold]:"
@@ -391,6 +396,7 @@ def render_scan(state, simulated: bool = False) -> Table:
     if simulated:
         title += "  [yellow](SIMULATED)[/yellow]"
     table = Table(title=title)
+    table.add_column("Name")
     table.add_column("Frequency", justify="right")
     table.add_column("BW kHz", justify="right")
     table.add_column("Peak dB", justify="right")
@@ -399,6 +405,7 @@ def render_scan(state, simulated: bool = False) -> Table:
     table.add_column("Demod")
     for ch in sorted(state.channels, key=lambda c: c.peak_db, reverse=True)[:15]:
         table.add_row(
+            ch.name,
             f"{ch.center_hz / 1e6:.4f}",
             f"{ch.bandwidth_hz / 1e3:.0f}",
             f"{ch.peak_db:.1f}",

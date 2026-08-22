@@ -7,6 +7,7 @@ from collections import deque
 
 import numpy as np
 
+from radiotui.channels_file import UserChannels
 from radiotui.config import BANDS, ScannerSettings
 from radiotui.core.models import Channel, DemodMode, Peak, SpectrumFrame
 
@@ -65,6 +66,11 @@ class ChannelTracker:
         self._settings = settings
         self.channels: dict[float, Channel] = {}
         self._pending: dict[float, int] = {}
+        self.user_channels = UserChannels()
+
+    def set_user_channels(self, user_channels: UserChannels) -> None:
+        """Live-apply bookmarks (names) and ignores (birdie silencing)."""
+        self.user_channels = user_channels
 
     def _key(self, freq_hz: float) -> float:
         return round(freq_hz / 5_000.0) * 5_000.0
@@ -80,6 +86,8 @@ class ChannelTracker:
         matched_keys: set[float] = set()
 
         for peak in peaks:
+            if self.user_channels.ignored(peak.center_hz):
+                continue
             key = self._existing_or_new_key(peak.center_hz, matched_keys)
             matched_keys.add(key)
             channel = self.channels.get(key)
@@ -107,11 +115,25 @@ class ChannelTracker:
 
         for key, channel in self.channels.items():
             if key not in matched_keys:
+                # An ignore window covering a tracked birdie retires it at once
+                # instead of waiting for the miss counter.
                 channel.misses += 1
+                channel.active = channel.active and not self.user_channels.ignored(
+                    channel.center_hz
+                )
                 if channel.misses > self._settings.drop_after_misses:
                     channel.active = False
 
+        return self._annotate(self._active())
+
+    def _active(self) -> list[Channel]:
         return [c for c in self.channels.values() if c.active]
+
+    def _annotate(self, active: list[Channel]) -> list[Channel]:
+        """Stamp bookmark names so tables/exports never re-resolve them."""
+        for channel in active:
+            channel.name = self.user_channels.name_for(channel.center_hz)
+        return active
 
     def _existing_or_new_key(self, center_hz: float, taken: set[float]) -> float:
         tolerance = 25_000.0
@@ -127,8 +149,4 @@ class ChannelTracker:
         return best_key if best_key is not None else self._key(center_hz)
 
     def active_channels(self) -> list[Channel]:
-        return sorted(
-            (c for c in self.channels.values() if c.active),
-            key=lambda c: c.peak_db,
-            reverse=True,
-        )
+        return sorted(self._annotate(self._active()), key=lambda c: c.peak_db, reverse=True)
