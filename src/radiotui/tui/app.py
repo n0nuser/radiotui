@@ -281,6 +281,7 @@ class RadioTuiApp(App):
         self._ignore_rssi = False
         self.user_channels = UserChannels()
         self.session_clips: list = []
+        self._channel_bw_hz: float | None = None
         self._replay_player: AudioPlayer | None = None
         self._replay_thread: threading.Thread | None = None
 
@@ -372,6 +373,7 @@ class RadioTuiApp(App):
     def _start_sweep(self, band: Band, name: str | None = None) -> None:
         self.band_name = name or "custom"
         self.band_label = band.label
+        self._channel_bw_hz = band.channel_bw_hz
         if self.sweeper is not None:
             self.sweeper.stop()
         waterfall = self.query_one("#waterfall", Waterfall)
@@ -766,7 +768,13 @@ class RadioTuiApp(App):
         self.muted = muted
         self._ignore_rssi = False
         monitor = ChannelMonitor(
-            self.device, freq_hz, demod, self.settings, muted=muted, band_label=self.band_label
+            self.device,
+            freq_hz,
+            demod,
+            self.settings,
+            muted=muted,
+            band_label=self.band_label,
+            channel_bw_hz=self._channel_bw_hz,
         )
         monitor.recorder.enabled = enable_recorder
         monitor.recorder.on_clip_end = self.on_clip_end

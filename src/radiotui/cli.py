@@ -326,7 +326,13 @@ def cmd_scan(args) -> None:
                     if args.seconds:
                         budget = max(1.0, args.seconds - (time.time() - t0))
                     _headless_auto_hold(
-                        device, sweeper, settings, state.hold_request, budget, band.label
+                        device,
+                        sweeper,
+                        settings,
+                        state.hold_request,
+                        budget,
+                        band.label,
+                        band.channel_bw_hz,
                     )
                 if args.seconds and time.time() - t0 > args.seconds:
                     break
@@ -354,7 +360,13 @@ def _export_sweep(channels, path_str: str, band: Band, settings, sweeper) -> Pat
 
 
 def _headless_auto_hold(
-    device, sweeper, settings, req, budget_s: float | None = None, band_label: str = ""
+    device,
+    sweeper,
+    settings,
+    req,
+    budget_s: float | None = None,
+    band_label: str = "",
+    channel_bw_hz: float | None = None,
 ) -> None:
     freq_mhz = req.freq_hz / 1e6
     console.print(
@@ -362,7 +374,13 @@ def _headless_auto_hold(
         f"(SNR {req.snr_db:.0f} dB), VOX recording"
     )
     monitor = ChannelMonitor(
-        device, req.freq_hz, req.demod, settings, muted=True, band_label=band_label
+        device,
+        req.freq_hz,
+        req.demod,
+        settings,
+        muted=True,
+        band_label=band_label,
+        channel_bw_hz=channel_bw_hz,
     )
     monitor.recorder.enabled = True
     monitor.recorder.on_clip_end = lambda clip: console.print(

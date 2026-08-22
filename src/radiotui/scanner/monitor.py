@@ -5,7 +5,13 @@ from __future__ import annotations
 import threading
 import time
 
-from radiotui.audio.demod import audio_to_pcm16, channel_audio, rssi_dbfs, scale_pcm16
+from radiotui.audio.demod import (
+    DemodState,
+    audio_to_pcm16,
+    channel_audio,
+    rssi_dbfs,
+    scale_pcm16,
+)
 from radiotui.audio.player import AudioPlayer
 from radiotui.audio.recorder import VoxRecorder
 from radiotui.config import Settings, clamp_volume_db, effective_sample_rate
@@ -38,11 +44,14 @@ class ChannelMonitor:
         settings: Settings,
         muted: bool = False,
         band_label: str = "",
+        channel_bw_hz: float | None = None,
     ) -> None:
         self._device = device
         self._freq_hz = freq_hz
         self._demod = demod
         self._settings = settings
+        self._channel_bw_hz = channel_bw_hz
+        self._demod_state = DemodState()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.player = AudioPlayer(settings.audio.output_rate_hz)
@@ -143,7 +152,14 @@ class ChannelMonitor:
             self.rssi_dbfs = rssi_dbfs(iq)
             if self.on_rssi:
                 self.on_rssi(self.rssi_dbfs)
-            audio = channel_audio(iq, fs, self._demod, rate)
+            audio = channel_audio(
+                iq,
+                fs,
+                self._demod,
+                rate,
+                channel_bw_hz=self._channel_bw_hz,
+                state=self._demod_state,
+            )
             if len(audio):
                 pcm = audio_to_pcm16(audio)
                 if not self.muted:
