@@ -10,6 +10,8 @@ from rich.style import Style
 from textual.strip import Strip
 from textual.widget import Widget
 
+from radiotui.tui.widgets.axis import axis_segments
+
 LEVEL_CHARS = " .:-=+*#%@"
 LEVEL_COLORS = [
     "#101038",
@@ -32,17 +34,38 @@ class Waterfall(Widget):
         super().__init__(**kwargs)
         self.rows: deque[tuple[np.ndarray, np.ndarray]] = deque(maxlen=max_rows)
         self.floor_db = -100.0
+        self.selected_hz: float | None = None
 
-    def push_frame(self, freqs: np.ndarray, power: np.ndarray, floor_db: float) -> None:
+    def push_frame(
+        self,
+        freqs: np.ndarray,
+        power: np.ndarray,
+        floor_db: float,
+        selected_hz: float | None = None,
+    ) -> None:
         self.rows.append((freqs, power))
         self.floor_db = floor_db
+        self.selected_hz = selected_hz
         self.refresh()
 
     def render_line(self, y: int) -> Strip:
         width = self.size.width
+        height = self.size.height or 1
         if width <= 0 or not self.rows:
             return Strip.blank(width)
-        row_index_from_bottom = self.size.height - 1 - y
+        if y == height - 1:
+            # Bottom row used to show the oldest (least interesting) line; it
+            # now carries the shared frequency axis.
+            freqs = self.rows[-1][0]
+            if len(freqs) < 2:
+                return Strip.blank(width)
+            return Strip(
+                axis_segments(
+                    float(freqs[0]), float(freqs[-1]), width, selected_hz=self.selected_hz
+                ),
+                width,
+            )
+        row_index_from_bottom = height - 1 - y
         if row_index_from_bottom < 0 or row_index_from_bottom >= len(self.rows):
             return Strip.blank(width)
         freqs, power = self.rows[len(self.rows) - 1 - row_index_from_bottom]

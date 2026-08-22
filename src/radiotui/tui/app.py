@@ -402,14 +402,21 @@ class RadioTuiApp(App):
             # gone and queries resolve against a bare default screen.
             return
         active_freqs = [ch.center_hz for ch in latest.channels]
+        selected_hz = self.selected_key()
         spectrum.update_frame(
             latest.frame.freqs_hz,
             latest.frame.power_db,
             latest.noise_floor_db,
             latest.threshold_db,
             active_freqs,
+            selected_hz=selected_hz,
         )
-        waterfall.push_frame(latest.frame.freqs_hz, latest.frame.power_db, latest.noise_floor_db)
+        waterfall.push_frame(
+            latest.frame.freqs_hz,
+            latest.frame.power_db,
+            latest.noise_floor_db,
+            selected_hz=selected_hz,
+        )
         self.refresh_table(latest.channels)
         self.refresh_status()
         if latest.hold_request is not None:
@@ -499,7 +506,10 @@ class RadioTuiApp(App):
             f"sweeps {self.sweeper.sweeps_done if self.sweeper else 0}",
         ]
         if self.last_state:
-            parts.append(f"floor {self.last_state.noise_floor_db:.1f} dB")
+            floor = self.last_state.noise_floor_db
+            parts.append(f"floor {floor:.1f} dB")
+            # Vertical reference for the spectrum/waterfall colour mapping.
+            parts.append(f"dB {floor - 5.0:.0f}→{floor + 45.0:.0f}")
         parts.append(f"thr {self.settings.scanner.threshold_margin_db:+.1f} dB")
         parts.append(f"dwell {self.settings.scanner.hop_dwell_s * 1000:.0f} ms")
         gain_label = f"{self.gain_db:.1f} dB" if self.gain_db is not None else "auto"

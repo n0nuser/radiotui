@@ -8,6 +8,8 @@ from rich.style import Style
 from textual.strip import Strip
 from textual.widget import Widget
 
+from radiotui.tui.widgets.axis import axis_segments
+
 BLOCKS = " ▁▂▃▄▅▆▇█"
 COLD_STYLE = Style.parse("#3b4d8f")
 HOT_GRADIENT = ["#00e676", "#76ff03", "#ffee58", "#ff9800", "#ff5722", "#e91e63"]
@@ -23,6 +25,7 @@ class SpectrumBar(Widget):
         self.floor_db = -100.0
         self.threshold_db = -90.0
         self.active_freqs: list[float] = []
+        self.selected_hz: float | None = None
 
     def update_frame(
         self,
@@ -31,18 +34,33 @@ class SpectrumBar(Widget):
         floor_db: float,
         threshold_db: float,
         active_freqs: list[float],
+        selected_hz: float | None = None,
     ) -> None:
         self.freqs = freqs
         self.power = power
         self.floor_db = floor_db
         self.threshold_db = threshold_db
         self.active_freqs = active_freqs
+        self.selected_hz = selected_hz
         self.refresh()
 
     def render_line(self, y: int) -> Strip:
         width = self.size.width
         height = self.size.height or 1
-        if self.freqs is None or len(self.freqs) == 0 or width <= 0 or y >= height - 1:
+        if y >= height - 1:
+            # The bottom row was always blank; it now carries the shared axis.
+            if self.freqs is None or len(self.freqs) < 2:
+                return Strip.blank(width)
+            return Strip(
+                axis_segments(
+                    float(self.freqs[0]),
+                    float(self.freqs[-1]),
+                    width,
+                    selected_hz=self.selected_hz,
+                ),
+                width,
+            )
+        if self.freqs is None or len(self.freqs) == 0 or width <= 0:
             return Strip.blank(width)
 
         db_lo = self.floor_db - 5.0
