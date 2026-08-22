@@ -128,6 +128,9 @@ async def test_bracket_keys_adjust_threshold_with_status_readout():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
+        # The live SIM sweep thread keeps the process CPU-busy, which stalls
+        # textual's wait_for_idle on every pilot.press; stop it before driving keys.
+        app.sweeper.stop()
         app.refresh_status()
         await pilot.press("]")
         await pilot.press("]")
@@ -150,6 +153,8 @@ async def test_curly_keys_adjust_dwell_with_status_readout():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
+        # See the bracket test: keep the process idle so key presses don't stall.
+        app.sweeper.stop()
         app.refresh_status()
         await pilot.press("}")
         await pilot.press("}")
