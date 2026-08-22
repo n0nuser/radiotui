@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import queue
 import time
+from pathlib import Path
 
 from rich.text import Text
 from textual import on
@@ -197,6 +198,7 @@ class RadioTuiApp(App):
         Binding("less_than_sign", "volume_down", "Vol-", key_display="<", show=False),
         Binding("a", "antenna", "Antenna"),
         Binding("o", "toggle_autonomous", "Auto"),
+        Binding("e", "export_channels", "Export"),
         Binding("f", "tune", "Freq"),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit", priority=True),
@@ -742,6 +744,19 @@ class RadioTuiApp(App):
 
     def action_help(self) -> None:
         self.push_screen(HelpModal())
+
+    def action_export_channels(self) -> None:
+        from radiotui.export import export_channels, export_path_for
+
+        channels = self.sweeper.channels if self.sweeper is not None else []
+        if not channels:
+            self.log_line("[yellow]Nothing to export yet - no channels discovered.[/yellow]")
+            return
+        target = export_path_for(
+            self.band_name, Path(self.settings.audio.recordings_dir), fmt="csv"
+        )
+        path = export_channels(channels, target)
+        self.log_line(f"[green]Exported {len(channels)} channel(s)[/] -> {path}")
 
     def action_tune(self) -> None:
         self.push_screen(TuneModal(), self._apply_tune_request)

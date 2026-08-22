@@ -6,6 +6,7 @@ import argparse
 import queue
 import sys
 import time
+from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -198,6 +199,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="auto-hold on live channels: VOX-record, release on silence",
     )
+    p_scan.add_argument(
+        "--export",
+        metavar="PATH",
+        default=None,
+        help="write discovered channels to PATH on exit (.csv or .json)",
+    )
 
     p_listen = sub.add_parser(
         "listen", parents=[common_options()], help="tune a frequency and play audio"
@@ -270,6 +277,7 @@ def cmd_scan(args) -> None:
     )
 
     t0 = time.time()
+    last_export = 0.0
     try:
         with Live(console=console, refresh_per_second=4) as live:
             while True:
@@ -281,6 +289,9 @@ def cmd_scan(args) -> None:
                     console.print(f"[red]Device error: {state.error}[/red]")
                     break
                 live.update(render_scan(state, simulated=not device.is_real))
+                if args.export and sweeper.channels and time.time() - last_export > 30.0:
+                    _export_sweep(sweeper.channels, args.export, band, settings, sweeper)
+                    last_export = time.time()
                 if state.hold_request is not None:
                     budget = None
                     if args.seconds:
@@ -291,9 +302,26 @@ def cmd_scan(args) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if args.export and sweeper.channels:
+            path = _export_sweep(sweeper.channels, args.export, band, settings, sweeper)
+            console.print(f"[green]Exported {len(sweeper.channels)} channel(s) to {path}[/green]")
         sweeper.stop()
         device.close()
     console.print("[dim]Scan stopped.[/dim]")
+
+
+def _export_sweep(channels, path_str: str, band: Band, settings, sweeper) -> Path:
+    from radiotui.export import export_channels
+
+    context = {
+        "band": band.label,
+        "start_hz": band.start_hz,
+        "end_hz": band.end_hz,
+        "gain_db": settings.scanner.gain_db,
+        "sample_rate_hz": effective_sample_rate(settings.scanner),
+        "sweeps_completed": getattr(sweeper, "sweeps_done", 0),
+    }
+    return export_channels(channels, path_str, context=context)
 
 
 def _headless_auto_hold(device, sweeper, settings, req, budget_s: float | None = None) -> None:
