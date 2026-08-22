@@ -5,10 +5,10 @@ from __future__ import annotations
 import threading
 import time
 
-from radiotui.audio.demod import audio_to_pcm16, channel_audio, rssi_dbfs
+from radiotui.audio.demod import audio_to_pcm16, channel_audio, rssi_dbfs, scale_pcm16
 from radiotui.audio.player import AudioPlayer
 from radiotui.audio.recorder import VoxRecorder
-from radiotui.config import Settings, effective_sample_rate
+from radiotui.config import Settings, clamp_volume_db, effective_sample_rate
 from radiotui.core.models import DemodMode
 from radiotui.sdr.base import SdrDevice
 
@@ -76,7 +76,9 @@ class ChannelMonitor:
                 self.on_error(str(exc))
             return
         if not self.muted:
-            self.player.start()
+            if not self.player.start():
+                if self.on_error:
+                    self.on_error("no audio backend found: install ffmpeg or alsa-utils")
         self._thread = threading.Thread(
             target=self._run, name=f"monitor-{self._freq_hz / 1e6:.3f}", daemon=True
         )
@@ -92,10 +94,23 @@ class ChannelMonitor:
 
     def set_muted(self, muted: bool) -> None:
         self.muted = muted
-        if muted:
-            self.player.stop()
-        else:
-            self.player.start()
+        if not muted and not self.player.running:
+            # Keep the player process warm while muted; only (re)start it if
+            # it was never launched or has died.
+            if not self.player.start() and self.on_error:
+                self.on_error("no audio backend found: install ffmpeg or alsa-utils")
+
+    @property
+    def volume_db(self) -> float:
+        return self._settings.audio.volume_db
+
+    def set_volume_db(self, volume_db: float) -> None:
+        """Playback volume in dB; affects the speakers only, never recordings."""
+        self._settings.audio.volume_db = clamp_volume_db(volume_db)
+
+    def _playback_pcm(self, pcm: bytes) -> bytes:
+        gain = 10.0 ** (self._settings.audio.volume_db / 20.0)
+        return scale_pcm16(pcm, gain)
 
     def _run(self) -> None:
         block = self._settings.audio.block_size
@@ -116,7 +131,7 @@ class ChannelMonitor:
             if len(audio):
                 pcm = audio_to_pcm16(audio)
                 if not self.muted:
-                    self.player.write(pcm)
+                    self.player.write(self._playback_pcm(pcm))
                 self.recorder.feed(pcm, rate)
             elapsed = time.time() - t0
             budget = block / fs

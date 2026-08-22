@@ -75,6 +75,11 @@ class AudioSettings:
     recordings_dir: str = "recordings"
     vox_threshold_dbfs: float = -32.0
     vox_hang_ms: int = 900
+    volume_db: float = 0.0
+
+
+def clamp_volume_db(volume_db: float) -> float:
+    return max(-60.0, min(12.0, round(volume_db, 1)))
 
 
 @dataclass

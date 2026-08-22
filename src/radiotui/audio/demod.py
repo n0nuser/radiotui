@@ -88,3 +88,12 @@ def rssi_dbfs(iq: np.ndarray) -> float:
 def audio_to_pcm16(audio: np.ndarray) -> bytes:
     scaled = np.clip(audio, -1.0, 1.0) * 32767.0
     return scaled.astype("<i2").tobytes()
+
+
+def scale_pcm16(pcm: bytes, gain: float) -> bytes:
+    """Scale little-endian int16 PCM by a linear gain factor, clipping to full scale."""
+    if gain == 1.0:
+        return pcm
+    samples = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype="<i2")
+    out = np.clip(samples.astype(np.float32) * gain, -32768.0, 32767.0)
+    return out.astype("<i2").tobytes()

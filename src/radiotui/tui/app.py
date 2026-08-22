@@ -54,7 +54,7 @@ def build_help_text() -> str:
     left: list[tuple[str, str]] = []
     right: list[tuple[str, str]] = []
     for binding in RadioTuiApp.BINDINGS:
-        if not binding.show or _is_band_binding(binding):
+        if _is_band_binding(binding):  # band presets get their own section below
             continue
         entry = (_key_label(binding), binding.description)
         (left if len(left) <= len(right) else right).append(entry)
@@ -124,6 +124,8 @@ class RadioTuiApp(App):
         Binding("p", "prev_channel", "Prev"),
         Binding("plus", "gain_up", "Gain+", key_display="+"),
         Binding("minus", "gain_down", "Gain-", key_display="-"),
+        Binding("greater_than_sign", "volume_up", "Vol+", key_display=">", show=False),
+        Binding("less_than_sign", "volume_down", "Vol-", key_display="<", show=False),
         Binding("a", "antenna", "Antenna"),
         Binding("o", "toggle_autonomous", "Auto"),
         Binding("question_mark", "help", "Help"),
@@ -378,6 +380,12 @@ class RadioTuiApp(App):
                 f"listening {self.monitor.freq_hz / 1e6:.4f} MHz "
                 f"({self.monitor.demod.value}){mute}{rec}"
             )
+            backend = self.monitor.player.backend
+            vol = f"vol {self.monitor.volume_db:+.0f}dB"
+            if backend:
+                parts.append(f"{vol} [dim]({backend})[/dim]")
+            else:
+                parts.append(f"[red]{vol} no audio backend[/red]")
         elif self.resume_sweep_after_listen:
             parts.append("sweep paused")
         lines = [Text.from_markup(" │ ".join(parts))]
@@ -579,6 +587,19 @@ class RadioTuiApp(App):
             self.device.set_gain_db(self.gain_db)
         except (OSError, RuntimeError, ValueError) as exc:
             self.log_line(f"[red]gain change failed: {exc}[/red]")
+        self.refresh_status()
+
+    def action_volume_up(self) -> None:
+        self._adjust_volume(+3.0)
+
+    def action_volume_down(self) -> None:
+        self._adjust_volume(-3.0)
+
+    def _adjust_volume(self, delta_db: float) -> None:
+        if self.monitor is None:
+            self.log_line("[yellow]Nothing is playing - press enter to listen first.[/yellow]")
+            return
+        self.monitor.set_volume_db(self.monitor.volume_db + delta_db)
         self.refresh_status()
 
     def action_antenna(self) -> None:
