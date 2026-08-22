@@ -85,6 +85,7 @@ class AudioSettings:
     vox_threshold_dbfs: float = -32.0
     vox_hang_ms: int = 900
     volume_db: float = 0.0
+    min_clip_seconds: float = 0.7
 
 
 def clamp_volume_db(volume_db: float) -> float:

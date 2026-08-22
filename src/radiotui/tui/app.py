@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import queue
+import threading
 import time
+import wave
 from pathlib import Path
 
 from rich.text import Text
@@ -17,6 +19,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
 
 from radiotui.antenna.advisor import analyze, format_report
+from radiotui.audio.player import AudioPlayer
 from radiotui.channels_file import (
     DEFAULT_IGNORE_WIDTH_HZ,
     Bookmark,
@@ -178,6 +181,8 @@ class RadioTuiApp(App):
     #sidepanel { width: 1fr; layout: vertical; }
     #meter { height: 7; border: round #3b4d8f; content-align: center middle; padding: 0 1; }
     #log { height: 1fr; border: round #3b4d8f; }
+    #clips { height: 1fr; border: round #3b4d8f; display: none; }
+    #clips.shown { display: block; }
     AntennaModal { align: center middle; background: #000000cc; }
     #antenna-report { width: 64; border: thick cyan; padding: 1 2; background: $surface; }
     HelpModal { align: center middle; background: #000000cc; }
@@ -211,6 +216,7 @@ class RadioTuiApp(App):
         Binding("f", "tune", "Freq"),
         Binding("b", "bookmark", "Name"),
         Binding("x", "ignore_channel", "Ignore"),
+        Binding("c", "toggle_clips", "Clips"),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit", priority=True),
     ]
@@ -274,6 +280,9 @@ class RadioTuiApp(App):
         self._peak_rssi: float = -120.0
         self._ignore_rssi = False
         self.user_channels = UserChannels()
+        self.session_clips: list = []
+        self._replay_player: AudioPlayer | None = None
+        self._replay_thread: threading.Thread | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -284,6 +293,7 @@ class RadioTuiApp(App):
             with Vertical(id="sidepanel"):
                 yield Static("", id="meter")
                 yield RichLog(id="log", highlight=False, markup=True)
+                yield DataTable(id="clips", cursor_type="row")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -305,6 +315,15 @@ class RadioTuiApp(App):
         self.user_channels, channels_warning = load_user_channels(self._channels_path)
         if channels_warning:
             self.log_line(f"[yellow]channels file ignored:[/] {channels_warning}")
+        clips_table = self.query_one("#clips", DataTable)
+        for key, label, width in (
+            ("time", "Time", 8),
+            ("freq", "Freq MHz", 11),
+            ("dur", "Dur s", 6),
+            ("peak", "Peak dB", 8),
+            ("band", "Band", 10),
+        ):
+            clips_table.add_column(label, key=key, width=width)
 
         try:
             opened = open_device(prefer_real=not self._force_sim)
@@ -341,6 +360,9 @@ class RadioTuiApp(App):
             if self.is_real
             else f"Device: [bold]{self.device.name}[/bold] ({mode}) - "
             "[yellow]no hardware found, signals are synthetic[/yellow]"
+        )
+        self.log_line(
+            f"Recordings: {Path(self.settings.audio.recordings_dir).expanduser().resolve()}"
         )
         self.start_band(self.band_name)
 
@@ -542,6 +564,9 @@ class RadioTuiApp(App):
                 parts.append(f"[red]{vol} no audio backend[/red]")
         elif self.resume_sweep_after_listen:
             parts.append("sweep paused")
+        if self.session_clips:
+            count = len(self.session_clips)
+            parts.append(f"{count} clip{'s' if count != 1 else ''}")
         lines = [Text.from_markup(" │ ".join(parts))]
         if self.last_rssi is not None:
             if self.monitor is not None:
@@ -590,7 +615,82 @@ class RadioTuiApp(App):
     def on_row_selected(self, event: DataTable.RowSelected) -> None:
         # enter is not a priority binding (so inputs can receive it); the
         # table's own select action fires RowSelected, which we listen to.
+        if event.data_table.id == "clips":
+            self._replay_selected_clip()
+            return
         self.action_listen()
+
+    def action_toggle_clips(self) -> None:
+        clips = self.query_one("#clips", DataTable)
+        if clips.has_class("shown"):
+            clips.remove_class("shown")
+            self.query_one("#channels", DataTable).focus()
+            self.log_line("Clips panel hidden")
+            return
+        clips.add_class("shown")
+        self._refresh_clips_table()
+        clips.focus()
+        self.log_line(f"{len(self.session_clips)} clip(s) this session - enter replays")
+
+    def _refresh_clips_table(self) -> None:
+        table = self.query_one("#clips", DataTable)
+        table.clear()
+        for clip in reversed(self.session_clips):
+            table.add_row(
+                time.strftime("%H:%M:%S", time.localtime(clip.started_at)),
+                f"{clip.freq_hz / 1e6:.4f}",
+                f"{clip.seconds:.1f}",
+                f"{clip.peak_rssi_dbfs:.0f}",
+                clip.band,
+                key=str(clip.path),
+            )
+
+    def _replay_selected_clip(self) -> None:
+        table = self.query_one("#clips", DataTable)
+        if not (0 <= table.cursor_row < len(self.session_clips)):
+            self.log_line("[yellow]No clip selected.[/yellow]")
+            return
+        clip = self.session_clips[len(self.session_clips) - 1 - table.cursor_row]
+        try:
+            with wave.open(str(clip.path), "rb") as wf:
+                rate_hz = wf.getframerate()
+        except (wave.Error, OSError) as exc:
+            self.log_line(f"[red]cannot open {clip.path.name}: {exc}[/red]")
+            return
+        self._start_replay(clip, rate_hz)
+
+    def _start_replay(self, clip, rate_hz: int) -> None:
+        self._stop_replay()
+        player = AudioPlayer(rate_hz)
+        if not player.start():
+            self.log_line("[red]no audio backend found: install ffmpeg or alsa-utils[/red]")
+            return
+        self._replay_player = player
+
+        def stream() -> None:
+            try:
+                with wave.open(str(clip.path), "rb") as wf:
+                    while player.running:
+                        frames = wf.readframes(4096)
+                        if not frames:
+                            break
+                        player.write(frames)
+            except (wave.Error, OSError) as exc:
+                self.post_message(self.MonitorError(f"replay failed: {exc}"))
+            finally:
+                player.stop()
+
+        self._replay_thread = threading.Thread(target=stream, name="clip-replay", daemon=True)
+        self._replay_thread.start()
+        self.log_line(f"[green]replaying[/green] {clip.path.name}")
+
+    def _stop_replay(self) -> None:
+        player, self._replay_player = self._replay_player, None
+        thread, self._replay_thread = self._replay_thread, None
+        if player is not None:
+            player.stop()
+        if thread is not None:
+            thread.join(timeout=2.0)
 
     def action_listen(self) -> None:
         if len(self.screen_stack) > 1:
@@ -665,7 +765,9 @@ class RadioTuiApp(App):
             self._pause_sweeper_for_monitor()
         self.muted = muted
         self._ignore_rssi = False
-        monitor = ChannelMonitor(self.device, freq_hz, demod, self.settings, muted=muted)
+        monitor = ChannelMonitor(
+            self.device, freq_hz, demod, self.settings, muted=muted, band_label=self.band_label
+        )
         monitor.recorder.enabled = enable_recorder
         monitor.recorder.on_clip_end = self.on_clip_end
         monitor.on_rssi = lambda db: self.post_message(self.RssiUpdate(db))
@@ -681,6 +783,11 @@ class RadioTuiApp(App):
     @on(ClipSaved)
     def on_clip_saved(self, message) -> None:
         self.clips_saved += 1
+        self.session_clips.append(message.clip)
+        clips = self.query_one("#clips", DataTable)
+        if clips.has_class("shown"):
+            self._refresh_clips_table()
+        self.refresh_status()
         self.log_line(
             f"[green]clip saved[/green] {message.clip.path.name} ({message.clip.seconds:.1f}s)"
         )
@@ -906,6 +1013,7 @@ class RadioTuiApp(App):
         self.log_line(f"[red]{message.text}[/red]")
 
     def on_unmount(self) -> None:
+        self._stop_replay()
         if self.sweeper is not None:
             self.sweeper.stop()
         if self.monitor is not None:

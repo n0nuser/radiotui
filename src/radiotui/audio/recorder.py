@@ -1,11 +1,18 @@
-"""VOX-gated WAV recorder: captures transmissions, splits on silence."""
+"""VOX-gated WAV recorder: captures transmissions, splits on silence.
+
+Each kept clip gets a ``.json`` sidecar next to the WAV carrying the context
+that produced it (frequency, demod, band, hardware settings, RSSI) so an
+overnight run stays traceable (#20). Clips shorter than
+``AudioSettings.min_clip_seconds`` are discarded instead of written.
+"""
 
 from __future__ import annotations
 
+import json
 import time
 import wave
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -23,15 +30,31 @@ def pcm_rms_dbfs(pcm: bytes) -> float:
     return 20.0 * np.log10(rms + 1e-12)
 
 
+def _iso(epoch_s: float) -> str:
+    return datetime.fromtimestamp(epoch_s, tz=timezone.utc).isoformat()
+
+
 @dataclass
 class ClipInfo:
     path: Path
     freq_hz: float
     seconds: float
+    started_at: float = 0.0
+    ended_at: float = 0.0
+    peak_rssi_dbfs: float = -120.0
+    mean_rssi_dbfs: float = -120.0
+    demod: str = ""
+    band: str = ""
+    hardware: dict = field(default_factory=dict)
 
 
 class VoxRecorder:
-    def __init__(self, freq_hz: float, settings: AudioSettings) -> None:
+    def __init__(
+        self,
+        freq_hz: float,
+        settings: AudioSettings,
+        context: dict | None = None,
+    ) -> None:
         self._freq = freq_hz
         self._settings = settings
         self._dir = Path(settings.recordings_dir)
@@ -42,8 +65,16 @@ class VoxRecorder:
         self._hang_remaining_ms = 0.0
         self.clips: list[ClipInfo] = []
         self.on_clip_end = None
+        self.on_error = None
         self.enabled = False
         self.last_voice_ts: float | None = None
+        extra = context or {}
+        self._demod = str(extra.get("demod", ""))
+        self._band = str(extra.get("band", ""))
+        hw = extra.get("hardware")
+        self._hardware = dict(hw) if isinstance(hw, dict) else {}
+        self._clip_started_at = 0.0
+        self._rssi_values: list[float] = []
 
     @property
     def directory(self) -> Path:
@@ -59,7 +90,7 @@ class VoxRecorder:
             return float("inf")
         return now - self.last_voice_ts
 
-    def feed(self, pcm: bytes, rate_hz: int | None = None) -> None:
+    def feed(self, pcm: bytes, rate_hz: int | None = None, rssi_dbfs: float | None = None) -> None:
         if rate_hz is not None:
             self._rate = rate_hz
         level_dbfs = pcm_rms_dbfs(pcm)
@@ -67,6 +98,8 @@ class VoxRecorder:
         voiced = level_dbfs > self._settings.vox_threshold_dbfs
         if voiced:
             self.last_voice_ts = time.time()
+        if self._file is not None and rssi_dbfs is not None:
+            self._rssi_values.append(rssi_dbfs)
         if not self.enabled:
             return
         if voiced:
@@ -95,6 +128,8 @@ class VoxRecorder:
         self._file.setsampwidth(2)
         self._file.setframerate(self._rate)
         self._frames_written = 0
+        self._clip_started_at = time.time()
+        self._rssi_values = []
 
     def _write(self, pcm: bytes) -> None:
         if self._file is None:
@@ -109,11 +144,51 @@ class VoxRecorder:
             return
         frames = self._frames_written
         path = self._path
+        started_at = self._clip_started_at
+        rssi_values = list(self._rssi_values)
         self._file.close()
         self._file = None
         self._path = None
-        if path is not None and frames > 0:
-            info = ClipInfo(path=path, freq_hz=self._freq, seconds=frames / self._rate)
-            self.clips.append(info)
-            if self.on_clip_end:
-                self.on_clip_end(info)
+        seconds = frames / self._rate
+        if path is None or seconds < self._settings.min_clip_seconds:
+            # Sub-second VOX blips are noise; leave nothing behind.
+            if path is not None:
+                path.unlink(missing_ok=True)
+            return
+        ended_at = time.time()
+        info = ClipInfo(
+            path=path,
+            freq_hz=self._freq,
+            seconds=seconds,
+            started_at=started_at,
+            ended_at=ended_at,
+            peak_rssi_dbfs=max(rssi_values) if rssi_values else -120.0,
+            mean_rssi_dbfs=sum(rssi_values) / len(rssi_values) if rssi_values else -120.0,
+            demod=self._demod,
+            band=self._band,
+            hardware=dict(self._hardware),
+        )
+        self.clips.append(info)
+        self._write_sidecar(info)
+        if self.on_clip_end:
+            self.on_clip_end(info)
+
+    def _write_sidecar(self, clip: ClipInfo) -> None:
+        payload = {
+            "freq_hz": clip.freq_hz,
+            "demod": clip.demod,
+            "band": clip.band,
+            "started_at": _iso(clip.started_at),
+            "ended_at": _iso(clip.ended_at),
+            "duration_s": round(clip.seconds, 3),
+            "peak_rssi_dbfs": round(clip.peak_rssi_dbfs, 1),
+            "mean_rssi_dbfs": round(clip.mean_rssi_dbfs, 1),
+            "hardware": clip.hardware,
+        }
+        try:
+            sidecar = clip.path.with_suffix(".json")
+            sidecar.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError as exc:
+            # The WAV itself is safe; surface the metadata failure if anyone listens.
+            if self.on_error:
+                self.on_error(f"sidecar write failed for {clip.path.name}: {exc}")

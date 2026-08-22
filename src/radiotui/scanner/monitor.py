@@ -37,6 +37,7 @@ class ChannelMonitor:
         demod: DemodMode,
         settings: Settings,
         muted: bool = False,
+        band_label: str = "",
     ) -> None:
         self._device = device
         self._freq_hz = freq_hz
@@ -45,7 +46,22 @@ class ChannelMonitor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.player = AudioPlayer(settings.audio.output_rate_hz)
-        self.recorder = VoxRecorder(freq_hz, settings.audio)
+        scanner = settings.scanner
+        self.recorder = VoxRecorder(
+            freq_hz,
+            settings.audio,
+            context={
+                "demod": demod.value,
+                "band": band_label,
+                "hardware": {
+                    "gain_db": scanner.gain_db,
+                    "freq_correction_ppm": scanner.freq_correction_ppm,
+                    "offset_tune": scanner.offset_tune,
+                    "bias_tee": scanner.bias_tee,
+                    "sample_rate_hz": effective_sample_rate(scanner),
+                },
+            },
+        )
         self.muted = muted
         self.rssi_dbfs: float = -120.0
         self.on_rssi = None
@@ -132,7 +148,7 @@ class ChannelMonitor:
                 pcm = audio_to_pcm16(audio)
                 if not self.muted:
                     self.player.write(self._playback_pcm(pcm))
-                self.recorder.feed(pcm, rate)
+                self.recorder.feed(pcm, rate, rssi_dbfs=self.rssi_dbfs)
             elapsed = time.time() - t0
             budget = block / fs
             if elapsed < budget:

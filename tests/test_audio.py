@@ -79,7 +79,12 @@ def test_rssi_and_pcm_conversion():
 
 
 def test_vox_recorder_gates_on_level(tmp_path):
-    settings = AudioSettings(recordings_dir=str(tmp_path), vox_threshold_dbfs=-30.0, vox_hang_ms=50)
+    settings = AudioSettings(
+        recordings_dir=str(tmp_path),
+        vox_threshold_dbfs=-30.0,
+        vox_hang_ms=50,
+        min_clip_seconds=0.0,
+    )
     recorder = VoxRecorder(145.5e6, settings)
     loud = audio_to_pcm16(np.full(480, 0.5))
     quiet = audio_to_pcm16(np.zeros(480))
