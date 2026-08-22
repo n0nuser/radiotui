@@ -11,6 +11,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
@@ -392,17 +393,22 @@ class RadioTuiApp(App):
                 self.sweeper.stop()
             return
         self.last_state = latest
+        try:
+            spectrum = self.query_one("#spectrum", SpectrumBar)
+            waterfall = self.query_one("#waterfall", Waterfall)
+        except NoMatches:
+            # Shutdown can race this interval tick: the main DOM is already
+            # gone and queries resolve against a bare default screen.
+            return
         active_freqs = [ch.center_hz for ch in latest.channels]
-        self.query_one("#spectrum", SpectrumBar).update_frame(
+        spectrum.update_frame(
             latest.frame.freqs_hz,
             latest.frame.power_db,
             latest.noise_floor_db,
             latest.threshold_db,
             active_freqs,
         )
-        self.query_one("#waterfall", Waterfall).push_frame(
-            latest.frame.freqs_hz, latest.frame.power_db, latest.noise_floor_db
-        )
+        waterfall.push_frame(latest.frame.freqs_hz, latest.frame.power_db, latest.noise_floor_db)
         self.refresh_table(latest.channels)
         self.refresh_status()
         if latest.hold_request is not None:
