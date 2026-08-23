@@ -154,7 +154,7 @@ radiotui record 446.00625e6    # VOX-record transmissions to WAV
 radiotui scan --ppm -70        # correct crystal error (see measurement below)
 radiotui scan --autonomous --export findings.json   # soak + machine-readable results
 radiotui antenna 145.500e6     # antenna advisor report
-  radiotui tuner 145.5M          # live signal bar to optimize the antenna
+radiotui tuner 145.5M           # live signal bar to optimize the antenna
 radiotui devices               # list detected SDR hardware
 ```
 
@@ -176,13 +176,15 @@ gain_db = 28.0       # default gain when --gain is not given
 
 [scanner]
 squelch_rssi_dbfs = -30   # RF gate for recordings; null = VOX level only
+region = "r1"              # ITU region: r1, r2, or r3
 
 [audio]
 recordings_dir = "~/radio/recordings"
 min_clip_seconds = 0.7     # shorter VOX blips are discarded
+deemphasis_us = 50         # FM broadcast curve: 50 or 75
 
 [[band]]             # custom presets join the built-ins:
-name = "ism_433"     # --band ism_433, a TUI number key, antenna advisor
+name = "ism_433"     # --band ism_433; press 0 to cycle user bands in the TUI
 label = "ISM 433"
 start_hz = 433_050_000
 end_hz = 434_790_000
@@ -194,7 +196,7 @@ demod = "nfm"
 `~/.config/radiotui/channels.toml` names the frequencies you care about and
 silences the ones you don't.
 Press `b` in the TUI to name the selected channel, `x` to ignore it, and `Shift-X`
-to remove an ignore window at the selected frequency — both
+to remove an ignore window at the selected frequency — all three actions
 write this file immediately.
 
 ```toml
@@ -246,7 +248,7 @@ frequency ruler beneath it.
 | `a` | antenna advisor for selected channel |
 | `o` | autonomous scan-and-hold on / off |
 | `?` | help overlay generated from these bindings |
-| number keys | jump between the first nine band presets (1-9) |
+| number keys | 1-9 select built-ins; 0 cycles registered user bands |
 | `q` | quit / close overlay |
 
 While listening, sweeping stays paused by design: one tuner, one consumer.
