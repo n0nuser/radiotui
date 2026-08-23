@@ -81,19 +81,6 @@ def stitch_segments(segments: list[_Segment]) -> tuple[np.ndarray, np.ndarray]:
     return freqs[sort_idx], power[sort_idx]
 
 
-def trim_to_range(
-    freqs: np.ndarray, power: np.ndarray, start_hz: float, end_hz: float
-) -> tuple[np.ndarray, np.ndarray]:
-    mask = (freqs >= start_hz) & (freqs < end_hz)
-    return freqs[mask], power[mask]
-
-
-def mask_dc(freqs: np.ndarray, power: np.ndarray, center_hz: float, width_hz: float) -> None:
-    """Zero out the DC spike region in place."""
-    mask = np.abs(freqs - center_hz) <= width_hz / 2
-    power[mask] = -200.0
-
-
 def frame_from_plan(plan: SweepPlan, hop_powers: list[tuple[float, np.ndarray]]) -> SpectrumFrame:
     keep_half = plan.sample_rate_hz * (0.5 - plan.edge_fraction)
     segments = []

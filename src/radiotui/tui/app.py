@@ -30,6 +30,7 @@ from radiotui.channels_file import (
     UserChannels,
     add_ignore,
     load_user_channels,
+    remove_ignore,
     save_user_channels,
     upsert_bookmark,
 )
@@ -312,6 +313,7 @@ class RadioTuiApp(App):
         Binding("f", "tune", "Freq"),
         Binding("b", "bookmark", "Name"),
         Binding("x", "ignore_channel", "Ignore"),
+        Binding("shift+x", "unignore_channel", "Unignore", show=False),
         Binding("c", "toggle_clips", "Clips"),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit", priority=True),
@@ -369,7 +371,6 @@ class RadioTuiApp(App):
         self.sort_by_peak = False
         self._rendered_cells: dict[str, tuple[str, ...]] = {}
         self._last_channels: list[Channel] = []
-        self.selected_hz: float | None = None
         self.last_state: ScanState | None = None
         self.last_rssi: float | None = None
         self._peak_rssi: float = -120.0
@@ -1090,7 +1091,6 @@ class RadioTuiApp(App):
             return
         new_row = min(max(table.cursor_row + delta, 0), len(self.row_keys) - 1)
         table.move_cursor(row=new_row, column=0)
-        self.selected_hz = self.row_keys[new_row]
 
     def action_next_channel(self) -> None:
         self._step_cursor(1)
@@ -1224,6 +1224,15 @@ class RadioTuiApp(App):
             f"(±{width_hz / 2 / 1e3:.0f} kHz) - it will drop off the table"
         )
         self._apply_user_channels()
+
+    def action_unignore_channel(self) -> None:
+        channel = self.selected_channel()
+        freq = self.cursor_hz or (channel.center_hz if channel else None)
+        if freq is None or not remove_ignore(self.user_channels, freq):
+            self.log_line("[yellow]No ignore window at the selected frequency.[/yellow]")
+            return
+        self._apply_user_channels()
+        self.log_line(f"[green]unignored[/green] {freq / 1e6:.4f} MHz")
 
     def _apply_user_channels(self) -> None:
         """Persist the book and push it into the running sweep."""
