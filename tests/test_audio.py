@@ -107,6 +107,26 @@ def test_vox_recorder_disabled_writes_nothing(tmp_path):
     assert recorder.stop() == []
 
 
+def test_vox_recorder_uses_utc_and_avoids_filename_collisions(tmp_path, monkeypatch):
+    settings = AudioSettings(recordings_dir=str(tmp_path), min_clip_seconds=0.0)
+    monkeypatch.setattr("radiotui.audio.recorder.time.time", lambda: 1_700_000_000.0)
+    loud = audio_to_pcm16(np.full(480, 0.5))
+
+    first = VoxRecorder(145.5e6, settings)
+    first.enabled = True
+    first.feed(loud, 48_000)
+    (first_clip,) = first.stop()
+
+    second = VoxRecorder(145.5e6, settings)
+    second.enabled = True
+    second.feed(loud, 48_000)
+    (second_clip,) = second.stop()
+
+    assert first_clip.path != second_clip.path
+    assert first_clip.path.name.endswith("_20231114_221320.wav")
+    assert second_clip.path.name.endswith("_20231114_221320_1.wav")
+
+
 def test_pcm_rms_levels():
     silence = pcm_rms_dbfs(audio_to_pcm16(np.zeros(100)))
     loud = pcm_rms_dbfs(audio_to_pcm16(np.full(100, 0.9)))

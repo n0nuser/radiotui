@@ -23,7 +23,7 @@ def frequency_shift(iq: np.ndarray, offset_hz: float, fs: float) -> np.ndarray:
     return iq * np.exp(-2j * np.pi * offset_hz * t)
 
 
-def decimate(x: np.ndarray, factor: int) -> np.ndarray:
+def decimate(x: np.ndarray, factor: int, state: DemodState | None = None) -> np.ndarray:
     """Anti-alias and downsample by ``factor`` with a triangular kernel.
 
     The kernel is a cascaded double boxcar, which costs one convolution but
@@ -33,6 +33,26 @@ def decimate(x: np.ndarray, factor: int) -> np.ndarray:
         return x
     kernel = np.convolve(np.ones(factor), np.ones(factor), mode="full")
     kernel /= kernel.sum()
+    if state is not None:
+        history_len = len(kernel) - 1
+        if state.decimation_factor != factor:
+            state.decimation_history = np.zeros(0)
+            state.decimation_input_count = 0
+            state.decimation_next_output = 0
+            state.decimation_factor = factor
+        history = state.decimation_history
+        combined = np.concatenate([history, x])
+        filtered = np.convolve(combined, kernel, mode="valid")
+        global_start = state.decimation_input_count - len(history)
+        first = max(global_start, state.decimation_next_output)
+        first += (-first) % factor
+        local = first - global_start
+        output = filtered[local::factor] if local < len(filtered) else np.zeros(0)
+        state.decimation_input_count += len(x)
+        state.decimation_history = combined[-history_len:]
+        if len(output):
+            state.decimation_next_output = first + len(output) * factor
+        return output
     filtered = np.convolve(x, kernel, mode="valid")
     return filtered[::factor]
 
@@ -74,8 +94,21 @@ def deemphasize_fir(
     return out, padded[-(len(taps) - 1) :] if len(taps) > 1 else np.zeros(0)
 
 
-def demod_nfm(iq: np.ndarray, fs: float, deviation_hz: float = 5_000.0) -> np.ndarray:
+def demod_nfm(
+    iq: np.ndarray,
+    fs: float,
+    deviation_hz: float = 5_000.0,
+    state: DemodState | None = None,
+) -> np.ndarray:
+    if state is not None and state.previous_iq is not None:
+        iq = np.concatenate([np.asarray([state.previous_iq]), iq])
+    if len(iq) < 2:
+        if state is not None and len(iq):
+            state.previous_iq = iq[-1]
+        return np.zeros(0, dtype=np.float64)
     phase = np.angle(iq[1:] * np.conj(iq[:-1]))
+    if state is not None:
+        state.previous_iq = iq[-1]
     audio = phase * fs / (2 * np.pi * deviation_hz)
     return np.clip(audio, -1.5, 1.5)
 
@@ -87,7 +120,7 @@ def demod_wfm(
     state: DemodState | None = None,
 ) -> np.ndarray:
     """WFM with 50 us de-emphasis as a state-carried FIR (vectorized)."""
-    audio = demod_nfm(iq, fs, deviation_hz)
+    audio = demod_nfm(iq, fs, deviation_hz, state)
     history = None if state is None else state.deemph_history
     out, history = deemphasize_fir(audio, fs, 50e-6, history)
     if state is not None:
@@ -101,7 +134,15 @@ def demod_am(iq: np.ndarray, fs: float, state: DemodState | None = None) -> np.n
     # Carrier/offset estimator: ~4 ms of audio so it tracks the tuner's DC
     # offset at any channel rate without eating the modulation.
     window = max(int(fs * 0.004) | 1, 9)
-    dc = np.convolve(envelope, np.ones(window) / window, mode="same")
+    if state is not None:
+        history = state.am_dc_history
+        if len(history) != window - 1:
+            history = np.zeros(window - 1)
+        padded = np.concatenate([history, envelope])
+        dc = np.convolve(padded, np.ones(window) / window, mode="valid")
+        state.am_dc_history = padded[-(window - 1) :]
+    else:
+        dc = np.convolve(envelope, np.ones(window) / window, mode="same")
     audio = envelope - dc
     rms = float(np.sqrt(np.mean(audio**2))) + 1e-9
     target = 0.35
@@ -135,10 +176,18 @@ DEFAULT_CHANNEL_BW_HZ = {
 
 @dataclass
 class DemodState:
-    """Per-monitor demodulation memory: de-emphasis history and AGC gain."""
+    """Per-monitor demodulation memory carried across input blocks."""
 
     deemph_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
     am_gain: float | None = None
+    am_dc_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    previous_iq: complex | None = None
+    decimation_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    decimation_factor: int | None = None
+    decimation_input_count: int = 0
+    decimation_next_output: int = 0
+    resample_input_samples: int = 0
+    resample_output_samples: int = 0
 
 
 def channel_decimation(fs: float, channel_bw_hz: float, mode: DemodMode) -> int:
@@ -149,11 +198,15 @@ def channel_decimation(fs: float, channel_bw_hz: float, mode: DemodMode) -> int:
 
 
 def channel_decimate(
-    iq: np.ndarray, fs: float, channel_bw_hz: float, mode: DemodMode
+    iq: np.ndarray,
+    fs: float,
+    channel_bw_hz: float,
+    mode: DemodMode,
+    state: DemodState | None = None,
 ) -> np.ndarray:
     """Low-pass to the channel bandwidth and decimate to the channel rate."""
     factor = channel_decimation(fs, channel_bw_hz, mode)
-    return decimate(iq, factor)
+    return decimate(iq, factor, state)
 
 
 def channel_audio(
@@ -168,16 +221,23 @@ def channel_audio(
     bw = DEFAULT_CHANNEL_BW_HZ[mode] if channel_bw_hz is None else channel_bw_hz
     factor = channel_decimation(fs, bw, mode)
     chan_fs = fs / factor
-    low = channel_decimate(iq, fs, bw, mode)
+    low = channel_decimate(iq, fs, bw, mode, state)
     if mode is DemodMode.WFM:
         audio = demod_wfm(low, chan_fs, state=state)
     elif mode is DemodMode.AM:
         audio = demod_am(low, chan_fs, state=state)
     else:
-        audio = demod_nfm(low, chan_fs)
+        audio = demod_nfm(low, chan_fs, state=state)
     if len(audio) < 8:
         return np.zeros(output_rate_hz // 10, dtype=np.float32)
-    target_len = max(int(len(audio) * output_rate_hz / chan_fs), 1)
+    ratio = output_rate_hz / chan_fs
+    if state is None:
+        target_len = max(int(len(audio) * ratio), 1)
+    else:
+        state.resample_input_samples += len(audio)
+        target_total = int(state.resample_input_samples * ratio)
+        target_len = max(target_total - state.resample_output_samples, 1)
+        state.resample_output_samples += target_len
     src_idx = np.linspace(0.0, len(audio) - 1, num=target_len)
     return np.interp(src_idx, np.arange(len(audio)), audio).astype(np.float32)
 
