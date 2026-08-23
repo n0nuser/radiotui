@@ -14,7 +14,7 @@ def test_wavelength_math_2m_calling():
 def test_band_profile_selection():
     assert analyze(100e6).band_label == "FM broadcast"
     assert analyze(121.5e6).band_label == "Airband"
-    assert analyze(145.5e6).band_label == "VHF high (2m)"
+    assert analyze(145.5e6).band_label == "VHF high"
     assert analyze(446e6).band_label == "UHF (70cm)"
 
 

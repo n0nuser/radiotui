@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from radiotui.core.models import DemodMode
 
@@ -22,13 +22,28 @@ BANDS: dict[str, Band] = {
     "hf_broadcast": Band(
         "hf_broadcast", "HF Broadcast (SW)", 5.9e6, 15.6e6, DemodMode.AM, 10_000.0
     ),
-    "hf_ham_40m": Band("hf_ham_40m", "40m Amateur", 7.0e6, 7.3e6, DemodMode.AM),
+    "hf_ham_40m": Band("hf_ham_40m", "40m Amateur", 7.0e6, 7.2e6, DemodMode.AM),
     "fm_broadcast": Band("fm_broadcast", "FM Broadcast", 87.5e6, 108.0e6, DemodMode.WFM, 200_000.0),
     "airband": Band("airband", "Airband (AM)", 118.0e6, 137.0e6, DemodMode.AM, 8_330.0),
     "vhf_ham": Band("vhf_ham", "2m Amateur", 144.0e6, 146.0e6, DemodMode.NFM),
     "vhf_marine": Band("vhf_marine", "Marine VHF", 156.0e6, 162.025e6, DemodMode.NFM),
-    "pmr446": Band("pmr446", "PMR446", 446.00625e6, 446.09375e6, DemodMode.NFM, 6_250.0),
+    "pmr446": Band("pmr446", "PMR446", 446.00625e6, 446.2e6, DemodMode.NFM, 12_500.0),
     "uhf_ham": Band("uhf_ham", "70cm Amateur", 430.0e6, 440.0e6, DemodMode.NFM),
+}
+
+REGIONAL_BAND_EDGES = {
+    "r1": {
+        "hf_ham_80m": (3.5e6, 3.8e6), "hf_ham_40m": (7.0e6, 7.2e6),
+        "vhf_ham": (144e6, 146e6), "uhf_ham": (430e6, 440e6),
+    },
+    "r2": {
+        "hf_ham_80m": (3.5e6, 4.0e6), "hf_ham_40m": (7.0e6, 7.3e6),
+        "vhf_ham": (144e6, 148e6), "uhf_ham": (420e6, 450e6),
+    },
+    "r3": {
+        "hf_ham_80m": (3.5e6, 3.9e6), "hf_ham_40m": (7.0e6, 7.2e6),
+        "vhf_ham": (144e6, 146e6), "uhf_ham": (430e6, 440e6),
+    },
 }
 
 HF_MAX_TUNER_HZ = 24.0e6
@@ -42,6 +57,12 @@ def band_by_name(name: str) -> Band:
     except KeyError:
         known = ", ".join(sorted(BANDS))
         raise ValueError(f"unknown band '{name}'. Known bands: {known}") from None
+
+
+def band_for_region(name: str, region: str = "r1") -> Band:
+    band = band_by_name(name)
+    edges = REGIONAL_BAND_EDGES.get(region, {}).get(name)
+    return replace(band, start_hz=edges[0], end_hz=edges[1]) if edges else band
 
 
 @dataclass
@@ -69,6 +90,7 @@ class ScannerSettings:
     #: RF gate for recording: blocks below this are treated as silence
     #: (None disables the gate). Raw tuner RSSI includes some LO-leak offset.
     squelch_rssi_dbfs: float | None = None
+    region: str = "r1"
 
 
 THRESHOLD_MARGIN_RANGE = (0.0, 40.0)
@@ -89,6 +111,7 @@ class AudioSettings:
     vox_hang_ms: int = 900
     volume_db: float = 0.0
     min_clip_seconds: float = 0.7
+    deemphasis_us: int = 50
 
 
 def clamp_volume_db(volume_db: float) -> float:

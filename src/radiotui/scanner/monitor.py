@@ -160,6 +160,7 @@ class ChannelMonitor:
                 rate,
                 channel_bw_hz=self._channel_bw_hz,
                 state=self._demod_state,
+                deemphasis_us=self._settings.audio.deemphasis_us,
             )
             if len(audio):
                 pcm = audio_to_pcm16(audio)
