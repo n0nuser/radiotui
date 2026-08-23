@@ -158,7 +158,7 @@ async def _hold_log_line(app) -> str:
 
 async def test_auto_hold_release_reports_no_traffic() -> None:
     """A channel that never produced voice is labeled 'no traffic', not 'max hold'."""
-    app = RadioTuiApp(force_sim=True)
+    app = RadioTuiApp(force_sim=True, start_sweeper=True)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
         app.settings.scanner.autonomous = True
@@ -176,7 +176,7 @@ async def test_auto_hold_release_reports_no_traffic() -> None:
 
 async def test_auto_hold_release_reports_max_hold() -> None:
     """Released while still talking (held past max_hold_s) is labeled 'max hold'."""
-    app = RadioTuiApp(force_sim=True)
+    app = RadioTuiApp(force_sim=True, start_sweeper=True)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
         app.settings.scanner.autonomous = True
@@ -193,7 +193,7 @@ async def test_auto_hold_release_reports_max_hold() -> None:
 
 async def test_auto_hold_release_reports_silence() -> None:
     """Voice that stopped long enough ago is labeled 'silence'."""
-    app = RadioTuiApp(force_sim=True)
+    app = RadioTuiApp(force_sim=True, start_sweeper=True)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
         app.settings.scanner.autonomous = True
