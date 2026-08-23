@@ -474,6 +474,9 @@ class RadioTuiApp(App):
         self._start_sweep(BANDS[band_name], band_name)
 
     def _start_sweep(self, band: Band, name: str | None = None) -> None:
+        if self.monitor is not None:
+            # Band switches retune the tuner the listener is using.
+            self.stop_monitor(resume_sweep=False)
         self.band_name = name or "custom"
         self.band_label = band.label
         self._channel_bw_hz = band.channel_bw_hz
@@ -713,6 +716,11 @@ class RadioTuiApp(App):
     # ---- actions ----
 
     def action_toggle_sweep(self) -> None:
+        if self.monitor is not None:
+            # One tuner, two consumers: sweeping while listening corrupts both
+            # streams and hammers the tuner with concurrent retunes.
+            self.log_line("[yellow]Sweep stays paused while listening - press l first.[/yellow]")
+            return
         if self.sweeper is None:
             return
         if self.sweeper.running:

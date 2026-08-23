@@ -4,7 +4,7 @@ import pytest
 from textual.widgets import Static
 
 from radiotui.audio.recorder import VoxRecorder
-from radiotui.config import AudioSettings, ScannerSettings
+from radiotui.config import BANDS, AudioSettings, ScannerSettings
 from radiotui.tui.app import RadioTuiApp, SettingsModal
 
 
@@ -174,3 +174,41 @@ def test_squelch_default_off_keeps_vox_only_behaviour(tmp_path):
     loud = bytes([0x40, 0x40] * 480)
     recorder.feed(loud, 48_000, rssi_dbfs=None)
     assert recorder.recording  # VOX opened despite no RSSI feed
+
+
+async def test_sweep_key_refuses_while_listening():
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause(0.2)
+        if app.sweeper is not None:
+            app.sweeper.stop()
+        await pilot.pause(0.2)
+        await pilot.press("enter")  # radio view: listens under cursor
+        await pilot.pause(0.5)
+        assert app.monitor is not None
+        was_running = app.sweeper.running
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        assert app.monitor is not None, "sweep key must not kill the monitor"
+        assert app.sweeper.running == was_running
+        assert "press l first" in "\n".join(app._events)
+        app.stop_monitor()
+
+
+async def test_band_switch_stops_monitor():
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause(0.2)
+        if app.sweeper is not None:
+            app.sweeper.stop()
+        await pilot.pause(0.2)
+        target = app.cursor_hz
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+        assert app.monitor is not None
+        bands = sorted(__import__("radiotui").config.BANDS)
+        other = next(b for b in bands if BANDS[b].start_hz > 1e8 and b != "fm_broadcast")
+        app.start_band(other)
+        await pilot.pause(0.3)
+        assert app.monitor is None
+        del target
