@@ -15,10 +15,21 @@ bands on its own, estimates the noise floor, flags frequencies that show
 - **Automatic squelch** — rolling noise-floor estimation (median + percentile)
   with persistence tracking: a channel only becomes "active" after it stays
   above the floor for several consecutive frames.
-- **Terminal UI** — live bar spectrum, scrolling waterfall, active-channel
-  table, signal meter, keyboard controls.
+- **Radio-first terminal UI** — opens like an FM radio: full-height spectrum
+  carousel over a waterfall, frequency ruler beneath, a bright tuning cursor
+  you walk with the arrow keys; channel table, log and clips pane are opt-in
+  (`t`), settings live in a menu (`m`).
 - **Listen & record** — NFM / WFM / AM demodulation in numpy, playback through
-  `ffplay`/`aplay`, VOX-gated WAV recording of transmissions.
+  `ffplay`/`aplay`, VOX-gated WAV recording of transmissions with an optional
+  RF-carrier squelch gate so quiet channels stop producing hiss-only clips.
+- **Bookmarks & ignore list** (`~/.config/radiotui/channels.toml`) — name the
+  frequencies you care about, silence the birdies; names show in the table and
+  exports, ignored windows never become channels or auto-holds.
+- **Recordings browser** — session clip list in the TUI (`c`), enter replays a
+  clip through the player; every kept WAV gets a `.json` sidecar with
+  frequency, demod, band, timestamps, RSSI and hardware context.
+- **Channel export** (`e`, `scan --export`) — CSV for spreadsheets, JSON with
+  context for scripts.
 - **Autonomous scan-and-hold** (`o` in the TUI, `--autonomous` headless) —
   when a channel crosses the activation gate the scanner pauses its sweep,
   VOX-records transmissions on that frequency and releases back to sweeping
@@ -96,7 +107,7 @@ Then verify with `radiotui devices`.
 | Metric | Value |
 | --- | --- |
 | Device detection | `Realtek RTL2838UHIDIR SN 00000001`, works as non-root user |
-| FM broadcast sweep (27 hops) | ~9 s/sweep (~3 hops/s), USB-limited |
+| FM broadcast sweep (27 hops) | ~4 s/sweep (~7 hops/s) standalone, dwell 120 ms |
 | Simulated sweep | ~50 hops/s (no USB latency) |
 | Real noise floor | −49 dB @ gain 28 dB (simulator baseline: −62 dBFS); default threshold margin works unmodified |
 | DC spike | masked automatically around every hop center (±3% of sample rate, real devices only); no phantom channels observed |
@@ -141,6 +152,7 @@ radiotui listen 145.500e6      # tune + demodulate + play
 radiotui listen 96.9e6 --bias-tee   # power an LNA while listening
 radiotui record 446.00625e6    # VOX-record transmissions to WAV
 radiotui scan --ppm -70        # correct crystal error (see measurement below)
+radiotui scan --autonomous --export findings.json   # soak + machine-readable results
 radiotui antenna 145.500e6     # antenna advisor report
 radiotui tuner                 # live signal bar to optimize the antenna
 radiotui devices               # list detected SDR hardware
@@ -162,8 +174,12 @@ ppm = -70            # crystal correction, applied on every run
 bias_tee = true      # keep your LNA powered
 gain_db = 28.0       # default gain when --gain is not given
 
+[scanner]
+squelch_rssi_dbfs = -30   # RF gate for recordings; null = VOX level only
+
 [audio]
 recordings_dir = "~/radio/recordings"
+min_clip_seconds = 0.7     # shorter VOX blips are discarded
 
 [[band]]             # custom presets join the built-ins:
 name = "ism_433"     # --band ism_433, a TUI number key, antenna advisor
@@ -173,31 +189,92 @@ end_hz = 434_790_000
 demod = "nfm"
 ```
 
+### Bookmarks and ignore list (optional)
+
+`~/.config/radiotui/channels.toml` names the frequencies you care about and
+silences the ones you don't.
+Press `b` in the TUI to name the selected channel, `x` to ignore it — both
+write this file immediately.
+
+```toml
+[[bookmark]]
+freq_hz = 145_500_000
+name = "2m calling"
+demod = "nfm"
+
+[[ignore]]
+freq_hz = 96_000_000
+width_hz = 20_000
+note = "birdie"
+```
+
+Ignored windows never become channels, never reach exports and are never
+auto-held; bookmarked channels carry their name in the table, in headless scan
+output and in CSV/JSON exports.
+
 ### TUI keys
+
+The TUI opens in the radio view: spectrum carousel over the waterfall with the
+frequency ruler beneath it.
+`←/→` walk the tuning cursor across the band, `↑/↓` coarse-step 100 kHz,
+`enter` plays what the cursor points at.
 
 | Key | Action |
 | --- | --- |
-| `s` | start / stop sweeping |
-| `enter` | listen to selected channel |
-| `l` | stop listening |
-| `m` | mute / unmute |
+| `←` / `→` | tuning cursor one column left / right |
+| `↑` / `↓` | cursor -/+ 100 kHz |
+| `enter` | radio view: listen under the cursor · panels: listen to selected row |
+| `l` | stop listening / replaying |
+| `s` | start / stop sweeping (refused while listening) |
+| `t` | show/hide analyst panels (channel table, log, clips) |
+| `m` | settings menu (threshold, dwell, min SNR, squelch, volume) |
+| `M` | mute / unmute |
 | `r` | record selected channel |
-| `n` / `p` | jump to next / previous active channel |
+| `n` / `p` | jump to next / previous active channel (panels) |
 | `+` / `-` | gain up / down |
+| `<` / `>` | volume down / up while listening |
+| `[` / `]` | detection threshold down / up |
+| `{` / `}` | hop dwell down / up |
+| `,` | sort table by frequency / peak |
+| `b` | name (bookmark) the selected channel |
+| `x` | add the selected channel to the ignore list |
+| `c` | toggle the session clips pane (`enter` replays a clip) |
+| `e` | export discovered channels to CSV |
+| `f` | tune an arbitrary frequency or sweep a custom range |
 | `a` | antenna advisor for selected channel |
 | `o` | autonomous scan-and-hold on / off |
+| `?` | help overlay generated from these bindings |
 | number keys | jump between band presets (1-9) |
-| `q` | quit |
+| `q` | quit / close overlay |
+
+While listening, sweeping stays paused by design: one tuner, one consumer.
 
 ## Layout
 
 ```
 src/radiotui/
-├── config.py     band presets, settings
-├── sdr/          device abstraction: real RtlSdr + simulator
-├── dsp/          FFT PSD, noise floor, peak detection/tracking
-├── scanner/      async sweep loop, channel monitor
-├── audio/        demodulators, player, VOX recorder
-├── antenna/      wavelength math + recommendations
-└── tui/          Textual app and widgets
+├── cli.py          argparse CLI, headless scan/listen/record/tuner
+├── config.py       band presets, settings dataclasses, ranges
+├── config_file.py  config.toml merge (defaults <- file <- flags)
+├── channels_file.py user bookmarks + ignore list (channels.toml)
+├── tuning.py        frequency/demod parsing helpers
+├── export.py        CSV/JSON channel export
+├── core/            shared models (Channel, ScanState, ...)
+├── sdr/             device abstraction: real RtlSdr (+compat shim) and simulator
+├── dsp/             FFT PSD, noise floor, peak detection/tracking
+├── scanner/         sweeper thread, channel monitor (listen/record loop)
+├── audio/           demodulators, DSP classifier, player, VOX recorder
+├── antenna/         wavelength math + recommendations
+└── tui/             Textual app: radio-first view, panels, widgets
 ```
+
+## Documentation
+
+Deeper material under [`docs/`](docs/):
+
+- `docs/adr/` — architecture decision records (why the DSP is numpy-only, how
+  tuner exclusivity works, where user channels live, ...).
+- `docs/research/` — measurement studies with numbers: audio chain redesign,
+  dropout forensics, hardware validation incl. the 30 min soak.
+- `docs/reasoning_logs/` — chronological investigation logs, including the dead
+  ends, for anyone re-tracing how a conclusion was reached.
