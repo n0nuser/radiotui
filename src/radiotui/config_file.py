@@ -18,7 +18,16 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on py3.10
     import tomli as tomllib
 
-from radiotui.config import BANDS, Band, Settings
+from radiotui.config import (
+    BANDS,
+    DWELL_RANGE_S,
+    MIN_SNR_RANGE,
+    THRESHOLD_MARGIN_RANGE,
+    Band,
+    Settings,
+    clamp,
+    clamp_volume_db,
+)
 from radiotui.core.models import DemodMode
 
 _HW_KEYS = {"ppm": int, "bias_tee": bool, "offset_tune": bool, "gain_db": float}
@@ -42,12 +51,6 @@ def _line_of(text: str, needle: str) -> int | None:
         if stripped.strip().startswith(needle) or f"{needle} =" in stripped:
             return lineno
     return None
-
-
-def _fail(path: Path, text: str, message: str, key: str) -> ConfigError:
-    line = _line_of(text, key)
-    where = f" ({path}, line {line})" if line else f" ({path})"
-    return ConfigError(f"{message}: '{key}'{where}")
 
 
 def load_config(path: Path | None = None) -> dict[str, Any]:
@@ -113,15 +116,50 @@ def apply_config_to_settings(
             expected = _resolve_field_type(fields[key])
             if expected is float and isinstance(value, int) and not isinstance(value, bool):
                 value = float(value)
-            elif not isinstance(value, expected):
+            elif not isinstance(value, expected) or (
+                isinstance(value, bool) and expected is not bool
+            ):
                 name = getattr(expected, "__name__", str(expected))
                 raise _key_error(
                     path,
                     f"'[{section}] {key}' must be {name}, got {type(value).__name__} at",
                     key,
                 )
+            try:
+                value = _validate_setting(section, key, value)
+            except ValueError as exc:
+                raise _key_error(path, str(exc), key) from None
             setattr(target, key, value)
     settings.audio.recordings_dir = os.path.expanduser(settings.audio.recordings_dir)
+
+
+def _validate_setting(section: str, key: str, value: Any) -> Any:
+    """Apply the same safety bounds used by interactive and CLI controls."""
+    if section == "scanner":
+        if key == "threshold_margin_db":
+            return clamp(value, *THRESHOLD_MARGIN_RANGE)
+        if key == "min_snr_db":
+            return clamp(value, *MIN_SNR_RANGE)
+        if key == "hop_dwell_s":
+            return clamp(value, *DWELL_RANGE_S)
+        if key == "fft_size" and value < 8:
+            raise ValueError("fft_size must be at least 8")
+        if key == "sample_rate_hz" and not 900_000 <= value <= 3_200_000:
+            raise ValueError("sample_rate_hz is outside the RTL-SDR range")
+        if key in {"min_persist_frames", "drop_after_misses", "history_size"} and value < 1:
+            raise ValueError(f"{key} must be positive")
+        if key == "peak_merge_gap_bins" and value < 0:
+            raise ValueError("peak_merge_gap_bins cannot be negative")
+    elif section == "audio":
+        if key in {"output_rate_hz", "block_size"} and value < 1:
+            raise ValueError(f"{key} must be positive")
+        if key == "vox_hang_ms" and value < 0:
+            raise ValueError("vox_hang_ms cannot be negative")
+        if key == "volume_db":
+            return clamp_volume_db(value)
+        if key == "min_clip_seconds" and value < 0:
+            raise ValueError("min_clip_seconds cannot be negative")
+    return value
 
 
 def register_user_bands(data: dict[str, Any], path: Path | None = None) -> list[str]:
@@ -172,7 +210,7 @@ def apply_hardware_defaults(args, data: dict[str, Any]) -> None:
     if isinstance(ppm, bool) or (ppm is not None and not isinstance(ppm, int)):
         raise ConfigError("'[hardware] ppm' must be an integer")
     gain = hw.get("gain_db")
-    if gain is not None and isinstance(gain, bool):
+    if gain is not None and (isinstance(gain, bool) or not isinstance(gain, (int, float))):
         raise ConfigError("'[hardware] gain_db' must be a number")
 
     args._hw_gain_db = None if gain is None else float(gain)
