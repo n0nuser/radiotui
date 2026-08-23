@@ -23,6 +23,8 @@ class SpectrumBar(Widget):
         super().__init__(**kwargs)
         self.freqs: np.ndarray | None = None
         self.power: np.ndarray | None = None
+        self._raw_freqs: np.ndarray | None = None
+        self._raw_power: np.ndarray | None = None
         self.floor_db = -100.0
         self.threshold_db = -90.0
         self.active_freqs: list[float] = []
@@ -37,8 +39,9 @@ class SpectrumBar(Widget):
         active_freqs: list[float],
         selected_hz: float | None = None,
     ) -> None:
-        self.freqs = freqs
-        self.power = power
+        self._raw_freqs = freqs
+        self._raw_power = power
+        self._rebin()
         self.floor_db = floor_db
         self.threshold_db = threshold_db
         self.active_freqs = active_freqs
@@ -69,13 +72,9 @@ class SpectrumBar(Widget):
         level_row = height - 2 - y
         cursor_column = self._cursor_column(width)
 
-        cols = np.array_split(np.arange(len(self.freqs)), width)
         segments: list[Segment] = []
-        for column_index, bin_idx in enumerate(cols):
-            if len(bin_idx) == 0:
-                segments.append(Segment(" ", None))
-                continue
-            peak_db = float(np.max(self.power[bin_idx]))
+        for column_index, peak_db in enumerate(self.power[:width]):
+            peak_db = float(peak_db)
             frac = (peak_db - db_lo) / (db_hi - db_lo)
             frac = min(max(frac, 0.0), 1.0)
             bar_height = frac * (height - 1)
@@ -87,7 +86,7 @@ class SpectrumBar(Widget):
                 continue
             block_idx = min(int((bar_height - level_row) * 8), 7)
             char = BLOCKS[block_idx]
-            is_active = self._column_active(bin_idx)
+            is_active = self._column_active(column_index, width)
             if column_index == cursor_column:
                 style = CURSOR_STYLE
             elif peak_db >= self.threshold_db:
@@ -107,7 +106,21 @@ class SpectrumBar(Widget):
             return -1
         return int(round((self.selected_hz - lo) / span * (width - 1)))
 
-    def _column_active(self, bin_idx: np.ndarray) -> bool:
-        lo = float(self.freqs[bin_idx[0]])
-        hi = float(self.freqs[bin_idx[-1]])
+    def _column_active(self, column: int, width: int) -> bool:
+        span = float(self.freqs[-1]) - float(self.freqs[0])
+        lo = float(self.freqs[0]) + column / width * span
+        hi = float(self.freqs[0]) + (column + 1) / width * span
         return any(lo <= f <= hi for f in self.active_freqs)
+
+    def _rebin(self) -> None:
+        if self._raw_freqs is None or self._raw_power is None:
+            return
+        width = max(self.size.width, 1)
+        columns = np.array_split(self._raw_power, width)
+        self.freqs = np.array([self._raw_freqs[0], self._raw_freqs[-1]])
+        self.power = np.array(
+            [np.max(column) if len(column) else -200.0 for column in columns], dtype=np.float32
+        )
+
+    def on_resize(self) -> None:
+        self._rebin()

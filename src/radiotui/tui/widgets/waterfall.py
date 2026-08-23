@@ -43,7 +43,12 @@ class Waterfall(Widget):
         floor_db: float,
         selected_hz: float | None = None,
     ) -> None:
-        self.rows.append((freqs, power))
+        width = max(self.size.width, 1)
+        columns = np.array_split(power, width)
+        reduced = np.array(
+            [np.max(column) if len(column) else -200.0 for column in columns], dtype=np.float32
+        )
+        self.rows.append((np.array([freqs[0], freqs[-1]]), reduced))
         self.floor_db = floor_db
         self.selected_hz = selected_hz
         self.refresh()
@@ -74,13 +79,9 @@ class Waterfall(Widget):
 
         db_lo = self.floor_db - 5.0
         db_hi = self.floor_db + 45.0
-        cols = np.array_split(np.arange(len(freqs)), width)
         segments: list[Segment] = []
-        for bin_idx in cols:
-            if len(bin_idx) == 0:
-                segments.append(Segment(" ", None))
-                continue
-            peak_db = float(np.max(power[bin_idx]))
+        for peak_db in power[:width]:
+            peak_db = float(peak_db)
             frac = (peak_db - db_lo) / (db_hi - db_lo)
             level = min(max(int(frac * len(LEVEL_CHARS)), 0), len(LEVEL_CHARS) - 1)
             char = LEVEL_CHARS[level]
@@ -90,3 +91,8 @@ class Waterfall(Widget):
                 style = LEVEL_STYLES[level]
             segments.append(Segment(char, style))
         return Strip(segments, width)
+
+    def on_resize(self) -> None:
+        # Rows are intentionally stored at display resolution; discard stale
+        # columns and let the next frame use the new width.
+        self.rows.clear()

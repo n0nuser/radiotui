@@ -66,6 +66,9 @@ class ChannelTracker:
         self._settings = settings
         self.channels: dict[float, Channel] = {}
         self._pending: dict[float, int] = {}
+        self._pending_last_seen: dict[float, int] = {}
+        self._sweep_number = 0
+        self._buckets: dict[int, set[float]] = {}
         self.user_channels = UserChannels()
 
     def set_user_channels(self, user_channels: UserChannels) -> None:
@@ -75,6 +78,17 @@ class ChannelTracker:
     def _key(self, freq_hz: float) -> float:
         return round(freq_hz / 5_000.0) * 5_000.0
 
+    def _index(self, key: float) -> None:
+        self._buckets.setdefault(int(round(key / 5_000.0)), set()).add(key)
+
+    def _unindex(self, key: float) -> None:
+        bucket_id = int(round(key / 5_000.0))
+        bucket = self._buckets.get(bucket_id)
+        if bucket is not None:
+            bucket.discard(key)
+            if not bucket:
+                self._buckets.pop(bucket_id, None)
+
     def _demod_for(self, freq_hz: float) -> DemodMode:
         for band in BANDS.values():
             if band.start_hz <= freq_hz <= band.end_hz:
@@ -83,6 +97,7 @@ class ChannelTracker:
 
     def update(self, peaks: list[Peak], now: float | None = None) -> list[Channel]:
         now = now if now is not None else time.time()
+        self._sweep_number += 1
         matched_keys: set[float] = set()
 
         for peak in peaks:
@@ -96,9 +111,12 @@ class ChannelTracker:
                     peak.peak_db, peak.snr_db, peak.bandwidth_hz, now
                 )
                 self._pending.pop(key, None)
+                self._pending_last_seen.pop(key, None)
             else:
                 count = self._pending.get(key, 0) + 1
                 self._pending[key] = count
+                self._pending_last_seen[key] = self._sweep_number
+                self._index(key)
                 if count >= self._settings.min_persist_frames:
                     self._pending.pop(key, None)
                     self.channels[key] = Channel(
@@ -113,7 +131,7 @@ class ChannelTracker:
                         active=True,
                     )
 
-        for key, channel in self.channels.items():
+        for key, channel in list(self.channels.items()):
             if key not in matched_keys:
                 # An ignore window covering a tracked birdie retires it at once
                 # instead of waiting for the miss counter.
@@ -123,6 +141,20 @@ class ChannelTracker:
                 )
                 if channel.misses > self._settings.drop_after_misses:
                     channel.active = False
+
+        pending_expiry = max(self._settings.drop_after_misses * 2, 8)
+        for key, last_seen in list(self._pending_last_seen.items()):
+            if self._sweep_number - last_seen > pending_expiry:
+                self._pending.pop(key, None)
+                self._pending_last_seen.pop(key, None)
+                if key not in self.channels:
+                    self._unindex(key)
+        channel_expiry = max(self._settings.history_size, self._settings.drop_after_misses * 4)
+        for key, channel in list(self.channels.items()):
+            if not channel.active and channel.misses > channel_expiry:
+                del self.channels[key]
+                if key not in self._pending:
+                    self._unindex(key)
 
         return self._annotate(self._active())
 
@@ -139,7 +171,14 @@ class ChannelTracker:
         tolerance = 25_000.0
         best_key: float | None = None
         best_dist = tolerance
-        for key in list(self.channels) + list(self._pending):
+        bucket = int(round(center_hz / 5_000.0))
+        keys = set()
+        for candidate_bucket in range(bucket - 5, bucket + 6):
+            keys.update(self._buckets.get(candidate_bucket, set()))
+        if not self._buckets:
+            keys.update(self.channels)
+            keys.update(self._pending)
+        for key in keys:
             if key in taken:
                 continue
             dist = abs(key - center_hz)
