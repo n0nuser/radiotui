@@ -313,7 +313,7 @@ class RadioTuiApp(App):
         Binding("f", "tune", "Freq"),
         Binding("b", "bookmark", "Name"),
         Binding("x", "ignore_channel", "Ignore"),
-        Binding("shift+x", "unignore_channel", "Unignore", show=False),
+        Binding("X", "unignore_channel", "Unignore", key_display="X", show=False),
         Binding("c", "toggle_clips", "Clips"),
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit", priority=True),
@@ -1238,7 +1238,7 @@ class RadioTuiApp(App):
 
     def action_unignore_channel(self) -> None:
         channel = self.selected_channel()
-        freq = self.cursor_hz or (channel.center_hz if channel else None)
+        freq = channel.center_hz if channel else self.cursor_hz
         if freq is None or not remove_ignore(self.user_channels, freq):
             self.log_line("[yellow]No ignore window at the selected frequency.[/yellow]")
             return
