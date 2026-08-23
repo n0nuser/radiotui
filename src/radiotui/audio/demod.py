@@ -1,17 +1,24 @@
 """Demodulation and audio conditioning (numpy only).
 
-Receive chain (#18): channel-filter to the band's ``channel_bw_hz``, decimate
-with a triangular (cascaded-boxcar) kernel whose nulls land on the aliases,
+Receive chain (#18): channel-filter to the band's ``channel_bw_hz``, decimate,
 demodulate, then resample to the output rate. De-emphasis is a truncated-FIR
 single-pole equivalent carried across blocks — no per-sample Python loop —
 and AM level is held by a slow AGC instead of per-block peak normalization.
+
+The channel filter is a Hamming-windowed sinc evaluated polyphase (only the
+samples that survive decimation are computed). The cascaded-boxcar kernel it
+replaces put its nulls on the fold frequencies but had barely 20 dB of
+stopband in between, so neighbouring stations reached the discriminator almost
+intact — audibly noisier than a hardware receiver.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 
 from radiotui.core.models import DemodMode
 
@@ -23,16 +30,44 @@ def frequency_shift(iq: np.ndarray, offset_hz: float, fs: float) -> np.ndarray:
     return iq * np.exp(-2j * np.pi * offset_hz * t)
 
 
-def decimate(x: np.ndarray, factor: int, state: DemodState | None = None) -> np.ndarray:
-    """Anti-alias and downsample by ``factor`` with a triangular kernel.
+@lru_cache(maxsize=16)
+def decimation_taps(factor: int) -> np.ndarray:
+    """Linear-phase low-pass for decimating by ``factor``.
 
-    The kernel is a cascaded double boxcar, which costs one convolution but
-    puts far more attenuation on the fold-in bands than a single average.
+    The cutoff sits just under the decimated Nyquist (0.5/factor) so nothing
+    folds back into the channel, and the transition is ~0.1/factor wide, which
+    a Hamming window spans in roughly ``33 * factor`` taps for ~53 dB of
+    stopband. Cached because the factor is fixed for the life of a monitor.
+    """
+    ntaps = (33 * factor) | 1
+    cutoff = 0.45 / factor  # normalized to the input rate
+    n = np.arange(ntaps) - (ntaps - 1) / 2
+    taps = 2 * cutoff * np.sinc(2 * cutoff * n) * np.hamming(ntaps)
+    return taps / taps.sum()
+
+
+def _polyphase(samples: np.ndarray, taps: np.ndarray, factor: int, first: int) -> np.ndarray:
+    """``convolve(samples, taps, "valid")[first::factor]`` without the discards.
+
+    Only the retained phase is evaluated, so cost scales with the *output*
+    length: a 1123-tap channel filter on a 65536-sample block costs ~2 ms
+    instead of the ~100 ms a full convolution would.
+    """
+    if first >= len(samples) - len(taps) + 1:
+        return np.zeros(0, dtype=samples.dtype)
+    windows = sliding_window_view(samples, len(taps))[first::factor]
+    return windows @ taps
+
+
+def decimate(x: np.ndarray, factor: int, state: DemodState | None = None) -> np.ndarray:
+    """Channel-filter and downsample by ``factor``.
+
+    ``state`` carries the filter tail between blocks so a stream decimated in
+    pieces is sample-for-sample identical to the whole signal decimated at once.
     """
     if factor <= 1:
         return x
-    kernel = np.convolve(np.ones(factor), np.ones(factor), mode="full")
-    kernel /= kernel.sum()
+    kernel = decimation_taps(factor)
     if state is not None:
         history_len = len(kernel) - 1
         if state.decimation_factor != factor:
@@ -42,19 +77,17 @@ def decimate(x: np.ndarray, factor: int, state: DemodState | None = None) -> np.
             state.decimation_factor = factor
         history = state.decimation_history
         combined = np.concatenate([history, x])
-        filtered = np.convolve(combined, kernel, mode="valid")
         global_start = state.decimation_input_count - len(history)
         first = max(global_start, state.decimation_next_output)
         first += (-first) % factor
         local = first - global_start
-        output = filtered[local::factor] if local < len(filtered) else np.zeros(0)
+        output = _polyphase(combined, kernel, factor, local)
         state.decimation_input_count += len(x)
         state.decimation_history = combined[-history_len:]
         if len(output):
             state.decimation_next_output = first + len(output) * factor
         return output
-    filtered = np.convolve(x, kernel, mode="valid")
-    return filtered[::factor]
+    return _polyphase(x, kernel, factor, 0)
 
 
 def deemphasize_loop(audio: np.ndarray, fs: float, tau_s: float) -> np.ndarray:
@@ -113,6 +146,41 @@ def demod_nfm(
     return np.clip(audio, -1.5, 1.5)
 
 
+#: Programme audio ends at 15 kHz; the 19 kHz pilot and everything above it is
+#: not audio and must not survive the resample.
+AUDIO_CUTOFF_HZ = 15_000.0
+
+
+@lru_cache(maxsize=8)
+def audio_taps(cutoff_hz: float, fs: float, ntaps: int = 201) -> np.ndarray:
+    n = np.arange(ntaps) - (ntaps - 1) / 2
+    cutoff = cutoff_hz / fs
+    taps = 2 * cutoff * np.sinc(2 * cutoff * n) * np.hamming(ntaps)
+    return taps / taps.sum()
+
+
+def audio_lowpass(
+    audio: np.ndarray, fs: float, cutoff_hz: float, state: DemodState | None = None
+) -> np.ndarray:
+    """Band-limit demodulated audio before it is resampled to the output rate.
+
+    Without this the FM noise triangle above 15 kHz — and the 19 kHz stereo
+    pilot — fold straight down into the audible band when `channel_audio`
+    resamples, which measures as several dB of avoidable hiss.
+    """
+    if cutoff_hz >= fs / 2 or len(audio) == 0:
+        return audio
+    taps = audio_taps(cutoff_hz, fs)
+    history = None if state is None else state.audio_lpf_history
+    if history is None or len(history) != len(taps) - 1:
+        history = np.zeros(len(taps) - 1)
+    padded = np.concatenate([history, audio])
+    out = np.convolve(padded, taps, mode="valid")
+    if state is not None:
+        state.audio_lpf_history = padded[-(len(taps) - 1) :]
+    return out
+
+
 def demod_wfm(
     iq: np.ndarray,
     fs: float,
@@ -126,7 +194,7 @@ def demod_wfm(
     out, history = deemphasize_fir(audio, fs, deemphasis_us * 1e-6, history)
     if state is not None:
         state.deemph_history = history
-    return out
+    return audio_lowpass(out, fs, AUDIO_CUTOFF_HZ, state)
 
 
 def demod_am(iq: np.ndarray, fs: float, state: DemodState | None = None) -> np.ndarray:
@@ -189,6 +257,7 @@ class DemodState:
     decimation_next_output: int = 0
     resample_input_samples: int = 0
     resample_output_samples: int = 0
+    audio_lpf_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
 
 def channel_decimation(fs: float, channel_bw_hz: float, mode: DemodMode) -> int:

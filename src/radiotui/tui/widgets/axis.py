@@ -1,4 +1,4 @@
-"""Shared frequency-axis row for the spectrum and waterfall widgets (#10).
+"""Frequency-axis row rendered under the spectrum (#10).
 
 One terminal row of round-number ticks (1/2/2.5/5/10 ladder) whose labels
 never touch; narrow terminals get fewer ticks instead of truncated ones.
