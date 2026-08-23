@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
+from radiotui.audio.classify import SignalClass, StreamClassifier
 from radiotui.config import AudioSettings
 
 MAX_CLIP_SECONDS = 120.0
@@ -77,6 +78,7 @@ class VoxRecorder:
         self._hardware = dict(hw) if isinstance(hw, dict) else {}
         self._clip_started_at = 0.0
         self._rssi_values: list[float] = []
+        self._classifier = StreamClassifier(settings.output_rate_hz)
 
     @property
     def directory(self) -> Path:
@@ -97,7 +99,12 @@ class VoxRecorder:
             self._rate = rate_hz
         level_dbfs = pcm_rms_dbfs(pcm)
         block_ms = 1000.0 * (len(pcm) / 2) / self._rate
-        voiced = level_dbfs > self._settings.vox_threshold_dbfs
+        samples = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+        verdict = self._classifier.feed(samples)
+        voiced = level_dbfs > self._settings.vox_threshold_dbfs and (
+            verdict.klass == SignalClass.SIGNAL
+            or level_dbfs > self._settings.vox_threshold_dbfs + 15.0
+        )
         if self._squelch_dbfs is not None and (rssi_dbfs is None or rssi_dbfs < self._squelch_dbfs):
             voiced = False  # RF gate: no carrier on frequency, however hot the hiss
         if voiced:
