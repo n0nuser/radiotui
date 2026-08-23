@@ -89,6 +89,12 @@ class Sweeper:
 
     def _run(self) -> None:
         dc_mask_hz = self._plan.sample_rate_hz * 0.03 if self._device.is_real else 0.0
+        try:
+            self._device.set_sample_rate_hz(self._plan.sample_rate_hz)
+            self._device.set_gain_db(self._settings.gain_db)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._queue.put(_error_state(str(exc)))
+            return
         while not self._stop.is_set():
             t0 = time.time()
             # Recomputed every sweep so runtime dwell changes apply live

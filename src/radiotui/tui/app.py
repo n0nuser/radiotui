@@ -345,6 +345,7 @@ class RadioTuiApp(App):
         offset_tune: bool = False,
         settings: Settings | None = None,
         channels_path: Path | None = None,
+        start_sweeper: bool = False,
     ) -> None:
         super().__init__()
         self._force_sim = force_sim
@@ -352,6 +353,7 @@ class RadioTuiApp(App):
         self._ppm_requested = ppm
         self._offset_tune_requested = offset_tune
         self._channels_path = channels_path
+        self._start_sweeper = start_sweeper
         self.bias_tee_on = False
         self.hf_active = False
         self.auto_hold_freq: float | None = None
@@ -366,7 +368,7 @@ class RadioTuiApp(App):
         self.queue: queue.Queue[ScanState] = queue.Queue(maxsize=4)
         self.band_name = "fm_broadcast"
         self.band_label = BANDS["fm_broadcast"].label
-        self.gain_db: float | None = None
+        self.gain_db: float | None = self.settings.scanner.gain_db
         self.muted = False
         self.clips_saved = 0
         self.row_keys: list[float] = []
@@ -504,11 +506,13 @@ class RadioTuiApp(App):
         )
         self.sweeper = Sweeper(self.device, self.plan, self.settings.scanner, self.queue)
         self.sweeper.set_user_channels(self.user_channels)
-        self.sweeper.start()
+        if self._start_sweeper:
+            self.sweeper.start()
         self.log_line(
             f"Sweeping [bold]{band.label}[/bold] ({len(self.plan.hop_centers_hz)} hops)"
             + (f" @ {effective_sample_rate(self.settings.scanner) / 1e3:.0f} kS/s" if hf else "")
         )
+        self.refresh_status()
 
     def log_line(self, text: str) -> None:
         # The log pane lives in the advanced panels and may be display:none;
@@ -1293,7 +1297,12 @@ def run_tui(
     settings: Settings | None = None,
 ) -> int:
     app = RadioTuiApp(
-        force_sim=force_sim, bias_tee=bias_tee, ppm=ppm, offset_tune=offset_tune, settings=settings
+        force_sim=force_sim,
+        bias_tee=bias_tee,
+        ppm=ppm,
+        offset_tune=offset_tune,
+        settings=settings,
+        start_sweeper=True,
     )
     app.run()
     return 0
