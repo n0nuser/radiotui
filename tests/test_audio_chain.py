@@ -125,3 +125,23 @@ def test_end_to_end_channel_audio_survives_the_new_chain():
     audio = channel_audio(iq, FS, DemodMode.NFM, 48_000, channel_bw_hz=12_500.0)
     assert len(audio) == pytest.approx(0.2 * 48_000, rel=0.02)
     assert audio.dtype == np.float32
+
+
+def test_streaming_channel_audio_preserves_sample_count():
+    n = 65_536
+    t = np.arange(3 * n) / FS
+    iq = np.exp(1j * 3.0 * np.sin(2 * np.pi * 1_000 * t))
+    state = DemodState()
+    blocks = [
+        channel_audio(
+            iq[offset : offset + n],
+            FS,
+            DemodMode.NFM,
+            48_000,
+            channel_bw_hz=12_500.0,
+            state=state,
+        )
+        for offset in range(0, len(iq), n)
+    ]
+    whole = channel_audio(iq, FS, DemodMode.NFM, 48_000, channel_bw_hz=12_500.0)
+    assert sum(len(block) for block in blocks) == len(whole)

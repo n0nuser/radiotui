@@ -124,15 +124,20 @@ class VoxRecorder:
 
     def _open_clip(self) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        started_at = time.time()
+        stamp = datetime.fromtimestamp(started_at, tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         mhz = self._freq / 1e6
         self._path = self._dir / f"{mhz:.4f}MHz_{stamp}.wav"
+        suffix = 1
+        while self._path.exists():
+            self._path = self._dir / f"{mhz:.4f}MHz_{stamp}_{suffix}.wav"
+            suffix += 1
         self._file = wave.open(str(self._path), "wb")
         self._file.setnchannels(1)
         self._file.setsampwidth(2)
         self._file.setframerate(self._rate)
         self._frames_written = 0
-        self._clip_started_at = time.time()
+        self._clip_started_at = started_at
         self._rssi_values = []
 
     def _write(self, pcm: bytes) -> None:
