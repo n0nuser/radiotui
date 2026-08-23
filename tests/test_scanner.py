@@ -16,6 +16,7 @@ from radiotui.sdr.simulator import SimulatedDevice
     [
         ("145.5mhz", 145.5e6),
         ("145.5M", 145.5e6),
+        ("145.5", 145.5e6),
         ("446006k", pytest.approx(446.006e6)),
         ("145.5e6", 145.5e6),
         ("145500000", 145.5e6),
