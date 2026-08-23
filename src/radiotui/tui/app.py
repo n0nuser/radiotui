@@ -356,6 +356,8 @@ class RadioTuiApp(App):
         self._channels_path = channels_path
         self._start_sweeper = start_sweeper
         self._overflow_band_index = -1
+        self._monitor_stops_pending = 0
+        self._shutting_down = False
         self.bias_tee_on = False
         self.hf_active = False
         self.auto_hold_freq: float | None = None
@@ -470,6 +472,10 @@ class RadioTuiApp(App):
         self.log_line(
             f"Recordings: {Path(self.settings.audio.recordings_dir).expanduser().resolve()}"
         )
+        for i, name in enumerate(BUILTIN_BAND_NAMES, start=1):
+            self.bind(str(i), f"band_key('{name}')", description=BANDS[name].label, show=False)
+        if any(name not in BUILTIN_BAND_NAMES for name in BANDS):
+            self.bind("0", "more_bands", description="More bands", show=False)
         self.start_band(self.band_name)
         self.refresh_status()
 
@@ -479,7 +485,9 @@ class RadioTuiApp(App):
     def _start_sweep(self, band: Band, name: str | None = None) -> None:
         if self.monitor is not None:
             # Band switches retune the tuner the listener is using.
-            self.stop_monitor(resume_sweep=False)
+            monitor = self._detach_monitor()
+            self._stop_monitor_worker(monitor, lambda: self._start_sweep(band, name))
+            return
         self.band_name = name or "custom"
         self.band_label = band.label
         self._channel_bw_hz = band.channel_bw_hz
@@ -507,10 +515,6 @@ class RadioTuiApp(App):
         )
         self.sweeper = Sweeper(self.device, self.plan, self.settings.scanner, self.queue)
         self.sweeper.set_user_channels(self.user_channels)
-        for i, name in enumerate(BUILTIN_BAND_NAMES, start=1):
-            self.bind(str(i), f"band_key('{name}')", description=BANDS[name].label, show=False)
-        if any(name not in BUILTIN_BAND_NAMES for name in BANDS):
-            self.bind("0", "more_bands", description="More bands", show=False)
         if self._start_sweeper:
             self.sweeper.start()
         self.log_line(
@@ -1018,7 +1022,25 @@ class RadioTuiApp(App):
         if self.sweeper is not None and self.sweeper.holding_active():
             self.sweeper.release_hold()
             self.auto_hold_freq = None
-        self.stop_monitor(resume_sweep=False)
+        old_monitor = self._detach_monitor()
+        if old_monitor is not None:
+            self._stop_monitor_worker(
+                old_monitor,
+                lambda: self._start_monitor_now(
+                    freq_hz, demod, muted, enable_recorder, pause_sweep
+                ),
+            )
+            return
+        self._start_monitor_now(freq_hz, demod, muted, enable_recorder, pause_sweep)
+
+    def _start_monitor_now(
+        self,
+        freq_hz: float,
+        demod: DemodMode,
+        muted: bool,
+        enable_recorder: bool,
+        pause_sweep: bool,
+    ) -> None:
         if pause_sweep:
             self._pause_sweeper_for_monitor()
         self.muted = muted
@@ -1057,22 +1079,45 @@ class RadioTuiApp(App):
         )
 
     def stop_monitor(self, resume_sweep: bool = True) -> None:
-        if self.monitor is not None:
-            self._ignore_rssi = True  # the stopping thread may still post readings
-            monitor = self.monitor
-            self.monitor = None
-            self.last_rssi = None
-            self._peak_rssi = -120.0
-            self.log_line("Monitor stopped")
-
-            def finish_stop() -> None:
-                monitor.stop()
-                if resume_sweep and self.resume_sweep_after_listen:
-                    self.call_from_thread(self._resume_sweep)
-
-            self.run_worker(finish_stop, thread=True, exit_on_error=False)
+        monitor = self._detach_monitor()
+        if monitor is not None:
+            callback = self._resume_sweep if resume_sweep else None
+            self._stop_monitor_worker(monitor, callback)
         elif resume_sweep:
             self._resume_sweep()
+
+    def _detach_monitor(self) -> ChannelMonitor | None:
+        if self.monitor is None:
+            return None
+        self._ignore_rssi = True  # the stopping thread may still post readings
+        monitor, self.monitor = self.monitor, None
+        self.last_rssi = None
+        self._peak_rssi = -120.0
+        if not self._shutting_down:
+            self.log_line("Monitor stopped")
+        return monitor
+
+    def _stop_monitor_worker(self, monitor: ChannelMonitor | None, callback=None) -> None:
+        if monitor is None:
+            if callback is not None:
+                callback()
+            return
+
+        def finish_stop() -> None:
+            monitor.stop()
+            self.call_from_thread(self._monitor_stop_finished, callback)
+
+        self._monitor_stops_pending += 1
+        self.run_worker(finish_stop, thread=True, exit_on_error=False)
+
+    def _monitor_stop_finished(self, callback=None) -> None:
+        self._monitor_stops_pending -= 1
+        if self._shutting_down:
+            if self._monitor_stops_pending == 0:
+                self._close_device()
+            return
+        if callback is not None:
+            callback()
 
     def _resume_sweep(self) -> None:
         if self.resume_sweep_after_listen:
@@ -1301,13 +1346,20 @@ class RadioTuiApp(App):
         self.log_line(f"[red]{message.text}[/red]")
 
     def on_unmount(self) -> None:
+        self._shutting_down = True
         self._stop_replay()
         if self.sweeper is not None:
             self.sweeper.stop()
-        if self.monitor is not None:
-            self.monitor.stop()
+        monitor = self._detach_monitor()
+        if monitor is not None:
+            self._stop_monitor_worker(monitor)
+        elif self._monitor_stops_pending == 0:
+            self._close_device()
+
+    def _close_device(self) -> None:
         if self.device is not None:
             self.device.close()
+            self.device = None
 
     def action_band(self, name: str) -> None:
         self.start_band(name)

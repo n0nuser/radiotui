@@ -1,5 +1,8 @@
 """Issue #12: arbitrary frequency / range entry from the TUI (`f` key)."""
 
+import time
+from threading import Event
+
 import pytest
 from textual.widgets import Static
 
@@ -116,3 +119,27 @@ async def test_hf_range_switches_direct_sampling_on():
         assert app.settings.scanner.hf_mode
         assert app.plan.hop_centers_hz[0] >= 7.0e6
         assert app.plan.hop_centers_hz[-1] <= 7.3e6
+
+
+async def test_monitor_handoff_waits_for_old_reader_before_starting_new_one():
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(140, 40)) as pilot:
+        stopped = Event()
+        started: list[tuple[float, DemodMode]] = []
+
+        class SlowMonitor:
+            def stop(self):
+                time.sleep(0.05)
+                stopped.set()
+
+        app.monitor = SlowMonitor()
+        app._start_monitor_now = lambda freq, demod, muted, record, pause: started.append(
+            (freq, demod)
+        )
+        app.start_monitor(96.9e6, DemodMode.WFM, muted=True, enable_recorder=False)
+        assert started == []
+        await pilot.pause(0.01)
+        assert started == []
+        await pilot.pause(0.1)
+        assert stopped.is_set()
+        assert started == [(96.9e6, DemodMode.WFM)]
