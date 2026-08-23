@@ -12,6 +12,7 @@ from radiotui.audio.demod import (
 from radiotui.audio.recorder import VoxRecorder, pcm_rms_dbfs
 from radiotui.config import AudioSettings
 from radiotui.core.models import DemodMode
+from radiotui.tuning import decay_peak_db
 
 
 def make_nfm_iq(fs=1_024_000.0, tone_hz=1000.0, dev=5000.0, seconds=0.05, offset_hz=0.0):
@@ -132,3 +133,11 @@ def test_pcm_rms_levels():
     loud = pcm_rms_dbfs(audio_to_pcm16(np.full(100, 0.9)))
     assert silence < -80
     assert loud > -5
+
+
+def test_peak_decay_stays_in_db_and_moves_toward_current_level():
+    peak = -20.0
+    for _ in range(10):
+        peak = decay_peak_db(peak, -60.0)
+    assert peak == pytest.approx(-21.25)
+    assert decay_peak_db(peak, -10.0) == -10.0

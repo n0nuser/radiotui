@@ -47,7 +47,7 @@ from radiotui.scanner.sweeper import Sweeper
 from radiotui.sdr.base import SdrDevice
 from radiotui.sdr.manager import OpenedDevice, describe_devices, open_device
 from radiotui.tui.app import run_tui
-from radiotui.tuning import guess_demod, parse_freq
+from radiotui.tuning import decay_peak_db, guess_demod, parse_freq
 
 console = Console()
 
@@ -513,7 +513,7 @@ def cmd_tuner(args) -> None:
     peak_hold = {"db": -120.0}
 
     def on_rssi(db: float) -> None:
-        peak_hold["db"] = max(peak_hold["db"] * 0.995, db)
+        peak_hold["db"] = decay_peak_db(peak_hold["db"], db)
 
     monitor.on_rssi = on_rssi
     console.print(

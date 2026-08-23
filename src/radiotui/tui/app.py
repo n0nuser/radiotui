@@ -54,7 +54,7 @@ from radiotui.scanner.sweeper import Sweeper
 from radiotui.sdr.manager import open_device
 from radiotui.tui.widgets.spectrum import SpectrumBar
 from radiotui.tui.widgets.waterfall import Waterfall
-from radiotui.tuning import guess_demod, parse_tune_request
+from radiotui.tuning import decay_peak_db, guess_demod, parse_tune_request
 
 GAIN_MIN, GAIN_MAX, GAIN_STEP = 0.0, 49.6, 4.8
 
@@ -1264,7 +1264,7 @@ class RadioTuiApp(App):
         # GIL; a quarter-Hz status cadence is plenty for a human meter.
         if now - self._last_meter_paint >= 0.25:
             self._last_meter_paint = now
-            self._peak_rssi = max(self._peak_rssi * 0.995, message.rssi_dbfs)
+            self._peak_rssi = decay_peak_db(self._peak_rssi, message.rssi_dbfs)
             self.refresh_status()
 
     @on(MonitorError)

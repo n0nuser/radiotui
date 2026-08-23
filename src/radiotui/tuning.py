@@ -15,9 +15,17 @@ def parse_freq(value: str) -> float:
         if v.endswith(suffix):
             return float(v[: -len(suffix)]) * mult
     try:
-        return float(v)
+        number = float(v)
+        # Human-sized bare values are MHz; retain support for explicit-looking
+        # large Hertz values used by existing command invocations.
+        return number * 1e6 if abs(number) < 10_000.0 else number
     except ValueError:
         raise argparse.ArgumentTypeError(f"cannot parse frequency '{value}'") from None
+
+
+def decay_peak_db(peak_db: float, current_db: float, decay_db: float = 0.125) -> float:
+    """Decay an RSSI peak in dB without treating negative dB as a ratio."""
+    return max(peak_db - decay_db, current_db)
 
 
 def guess_demod(freq_hz: float) -> DemodMode:
