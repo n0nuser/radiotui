@@ -40,6 +40,7 @@ from radiotui.config import (
     THRESHOLD_MARGIN_RANGE,
     Band,
     Settings,
+    band_for_region,
     band_needs_hf,
     clamp,
     clamp_volume_db,
@@ -466,7 +467,7 @@ class RadioTuiApp(App):
         self.refresh_status()
 
     def start_band(self, band_name: str) -> None:
-        self._start_sweep(BANDS[band_name], band_name)
+        self._start_sweep(band_for_region(band_name, self.settings.scanner.region), band_name)
 
     def _start_sweep(self, band: Band, name: str | None = None) -> None:
         if self.monitor is not None:

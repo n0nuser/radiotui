@@ -47,11 +47,11 @@ def _band_profile(freq_hz: float) -> tuple[str, str, str, list[str]]:
     if mhz < 108:
         return (
             "FM broadcast",
-            "folded dipole or any ~75 cm half-wave wire",
-            "horizontal (most FM broadcasts use horizontal polarization)",
+            "folded dipole or quarter-wave whip",
+            "circular or mixed (try both orientations)",
             [
                 "a T-shaped dipole cut to the table below works indoors near a window",
-                "rotate the dipole for maximum signal: FM is often horizontally polarized",
+                "try both orientations: most FM transmitters use circular or mixed polarization",
             ],
         )
     if mhz < 137:
@@ -66,7 +66,7 @@ def _band_profile(freq_hz: float) -> tuple[str, str, str, list[str]]:
         )
     if mhz < 174:
         return (
-            "VHF high (2m)",
+            "VHF high",
             "quarter-wave ground plane or 2m dipole",
             "vertical",
             [

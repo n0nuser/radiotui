@@ -118,11 +118,12 @@ def demod_wfm(
     fs: float,
     deviation_hz: float = 75_000.0,
     state: DemodState | None = None,
+    deemphasis_us: int = 50,
 ) -> np.ndarray:
-    """WFM with 50 us de-emphasis as a state-carried FIR (vectorized)."""
+    """WFM with configurable 50/75 us de-emphasis as a state-carried FIR."""
     audio = demod_nfm(iq, fs, deviation_hz, state)
     history = None if state is None else state.deemph_history
-    out, history = deemphasize_fir(audio, fs, 50e-6, history)
+    out, history = deemphasize_fir(audio, fs, deemphasis_us * 1e-6, history)
     if state is not None:
         state.deemph_history = history
     return out
@@ -216,6 +217,7 @@ def channel_audio(
     output_rate_hz: int = 48_000,
     channel_bw_hz: float | None = None,
     state: DemodState | None = None,
+    deemphasis_us: int = 50,
 ) -> np.ndarray:
     """Full receive chain: channelize, demodulate, resample to output_rate_hz."""
     bw = DEFAULT_CHANNEL_BW_HZ[mode] if channel_bw_hz is None else channel_bw_hz
@@ -223,7 +225,7 @@ def channel_audio(
     chan_fs = fs / factor
     low = channel_decimate(iq, fs, bw, mode, state)
     if mode is DemodMode.WFM:
-        audio = demod_wfm(low, chan_fs, state=state)
+        audio = demod_wfm(low, chan_fs, state=state, deemphasis_us=deemphasis_us)
     elif mode is DemodMode.AM:
         audio = demod_am(low, chan_fs, state=state)
     else:
