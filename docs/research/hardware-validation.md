@@ -20,7 +20,11 @@ Host: Ubuntu 24.04, librtlsdr 2.x via the compat shim, RTL-SDR v3 (R820T).
 | PPM flag | +23 applied and logged |
 | Bias tee | switches ON, ~4.5 V on the port |
 | Offset tuning | unsupported by librtlsdr2 2.0.1 even via raw symbols |
-| HF direct sampling | Q-branch engages, forced 250.43 kS/s; SW carriers at 8.400/12.130/12.275 MHz |
+| HF direct sampling | Q-branch engages, forced 250.43 kS/s; old carrier readings at 8.400/12.130/12.275 MHz |
+
+The HF carrier frequencies above were recorded before the sweep/device sample
+rate fix in issue #24 and must not be used as a frequency-accuracy baseline.
+They need to be re-measured on current `main` with the programmed rate.
 
 ## Field capture study (Baofeng as signal source)
 
