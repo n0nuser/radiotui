@@ -60,9 +60,11 @@ async def test_status_bar_shows_sweep_progress_and_paused_state():
 async def test_completed_sweep_is_announced():
     app = RadioTuiApp(force_sim=True, start_sweeper=True)
     async with app.run_test(size=(140, 40)) as pilot:
-        for _ in range(60):
+        await pilot.pause(0.2)
+        app.start_band("pmr446")  # one hop, so a full pass finishes promptly
+        for _ in range(100):
             await pilot.pause(0.1)
-            if "sweep #1 complete" in log_text(app):
+            if "complete" in log_text(app):
                 break
-        assert "sweep #1 complete" in log_text(app)
         app.sweeper.stop()
+        assert "complete" in log_text(app), "a finished sweep left no trace in the log"

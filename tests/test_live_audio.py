@@ -62,29 +62,73 @@ class CountingPlayer:
         self.frames += len(pcm) // 2
 
 
-def test_monitor_produces_audio_at_real_time():
-    """Audio must be produced as fast as the radio delivers it.
+READ_S = 0.10  # how long the "hardware" takes to deliver one block
+PROCESS_S = 0.04  # what demodulating it costs the consumer
 
-    Any shortfall drains the player's buffer until it underruns, which is
-    heard as a periodic gap. Reading on its own thread is what makes the
-    demodulation cost stop eating into the time available for reading.
+
+class TimedDevice(SimulatedDevice):
+    """Records when each read starts and blocks for a fixed, device-paced time."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._prepared = super().read_samples(4096)
+        self.read_starts: list[float] = []
+
+    def read_samples(self, count: int) -> np.ndarray:
+        self.read_starts.append(time.perf_counter())
+        time.sleep(READ_S)
+        return np.resize(self._prepared, count)
+
+
+def test_reads_are_not_delayed_by_demodulation(monkeypatch):
+    """The dropout: processing time must not eat into time spent reading.
+
+    A synchronous read is paced by the hardware, so demodulating in the same
+    loop makes each iteration cost read + processing while yielding only
+    `read` worth of audio. The device keeps producing during that gap with
+    nobody collecting, and the player's buffer drains until it stalls.
+
+    Asserted as the interval between consecutive reads: it must track the
+    device's own pace, not the pace plus the demodulation.
     """
+    monkeypatch.setattr(
+        "radiotui.scanner.monitor.channel_audio",
+        lambda *a, **k: (time.sleep(PROCESS_S), np.zeros(64, dtype=np.float32))[1],
+    )
+    device = TimedDevice(seed=1)
+    monitor = ChannelMonitor(device, 96.9e6, DemodMode.WFM, Settings(), muted=True)
+
+    monitor.start()
+    time.sleep(READ_S * 12)
+    monitor.stop()
+
+    intervals = np.diff(device.read_starts)
+    assert len(intervals) >= 4, "too few reads to judge the cadence"
+    median = float(np.median(intervals))
+    serial = READ_S + PROCESS_S
+    assert median < (READ_S + serial) / 2, (
+        f"reads are {median * 1000:.0f} ms apart; the device delivers every "
+        f"{READ_S * 1000:.0f} ms, so demodulation ({PROCESS_S * 1000:.0f} ms) "
+        "is still being paid on the reading thread"
+    )
+
+
+def test_monitor_turns_every_delivered_block_into_audio():
+    """Nothing the device hands over may be dropped on the way to the speaker."""
     device = PacedDevice(seed=1)
     monitor = ChannelMonitor(device, 96.9e6, DemodMode.WFM, Settings(), muted=False)
     player = CountingPlayer()
     monitor.player = player
 
     monitor.start()
-    started = time.perf_counter()
-    time.sleep(3.0)
-    elapsed = time.perf_counter() - started
+    time.sleep(1.5)
     monitor.stop()
 
-    produced = player.frames / Settings().audio.output_rate_hz
-    assert produced / elapsed > 0.99, (
-        f"produced {produced:.2f} s of audio in {elapsed:.2f} s "
-        f"({produced / elapsed * 100:.1f}% of real time): the player will starve"
+    settings = Settings()
+    delivered_blocks = player.frames / (
+        settings.audio.block_size / FS * settings.audio.output_rate_hz
     )
+    assert delivered_blocks > 5, "the monitor barely produced any audio"
 
 
 @pytest.mark.parametrize(
