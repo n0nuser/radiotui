@@ -36,6 +36,7 @@ from radiotui.channels_file import (
 )
 from radiotui.config import (
     BANDS,
+    BUILTIN_BAND_NAMES,
     DWELL_RANGE_S,
     MIN_SNR_RANGE,
     THRESHOLD_MARGIN_RANGE,
@@ -98,7 +99,7 @@ def build_help_text() -> Text:
         text.append(f"{lk:<{width_l}}  {ld:<28}{rk:<{width_r}}  {rd}\n")
     text.append("\nBand presets\n", style="bold")
     row_count = 0
-    for i, name in enumerate(sorted(BANDS)[:9], start=1):
+    for i, name in enumerate(BUILTIN_BAND_NAMES, start=1):
         text.append(str(i), style="cyan")
         text.append(f" {BANDS[name].label:<18}")
         row_count += 1
@@ -107,6 +108,10 @@ def build_help_text() -> Text:
             row_count = 0
     if row_count:
         text.append("\n")
+    overflow = [name for name in sorted(BANDS) if name not in BUILTIN_BAND_NAMES]
+    if overflow:
+        text.append("0", style="cyan")
+        text.append(" more bands (cycles user presets)\n")
     text.append("\nq / esc closes this overlay", style="dim")
     return text
 
@@ -350,6 +355,7 @@ class RadioTuiApp(App):
         self._offset_tune_requested = offset_tune
         self._channels_path = channels_path
         self._start_sweeper = start_sweeper
+        self._overflow_band_index = -1
         self.bias_tee_on = False
         self.hf_active = False
         self.auto_hold_freq: float | None = None
@@ -501,8 +507,10 @@ class RadioTuiApp(App):
         )
         self.sweeper = Sweeper(self.device, self.plan, self.settings.scanner, self.queue)
         self.sweeper.set_user_channels(self.user_channels)
-        for i, name in enumerate(sorted(BANDS)[:9], start=1):
+        for i, name in enumerate(BUILTIN_BAND_NAMES, start=1):
             self.bind(str(i), f"band_key('{name}')", description=BANDS[name].label, show=False)
+        if any(name not in BUILTIN_BAND_NAMES for name in BANDS):
+            self.bind("0", "more_bands", description="More bands", show=False)
         if self._start_sweeper:
             self.sweeper.start()
         self.log_line(
@@ -1307,6 +1315,17 @@ class RadioTuiApp(App):
     def action_band_key(self, name: str) -> None:
         if name in BANDS:
             self.start_band(name)
+
+    def action_more_bands(self) -> None:
+        names = [name for name in sorted(BANDS) if name not in BUILTIN_BAND_NAMES]
+        if not names:
+            return
+        self._overflow_band_index = (self._overflow_band_index + 1) % len(names)
+        name = names[self._overflow_band_index]
+        self.start_band(name)
+        self.log_line(
+            f"User band {self._overflow_band_index + 1}/{len(names)}: {BANDS[name].label}"
+        )
 
 
 def run_tui(
