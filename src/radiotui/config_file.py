@@ -150,6 +150,8 @@ def _validate_setting(section: str, key: str, value: Any) -> Any:
             raise ValueError(f"{key} must be positive")
         if key == "peak_merge_gap_bins" and value < 0:
             raise ValueError("peak_merge_gap_bins cannot be negative")
+        if key == "region" and value not in {"r1", "r2", "r3"}:
+            raise ValueError("region must be one of r1, r2, or r3")
     elif section == "audio":
         if key in {"output_rate_hz", "block_size"} and value < 1:
             raise ValueError(f"{key} must be positive")
@@ -159,6 +161,8 @@ def _validate_setting(section: str, key: str, value: Any) -> Any:
             return clamp_volume_db(value)
         if key == "min_clip_seconds" and value < 0:
             raise ValueError("min_clip_seconds cannot be negative")
+        if key == "deemphasis_us" and value not in {50, 75}:
+            raise ValueError("deemphasis_us must be 50 or 75")
     return value
 
 
