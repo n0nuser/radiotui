@@ -15,6 +15,8 @@ Numbered in the order the decision was made. Status is `Accepted` unless noted.
 | [0009](0009-regional-radio-settings.md) | Regional band edges and configurable FM de-emphasis | 2026-08-23 |
 | [0010](0010-classifier-vox-gate.md) | Audio classifier as a VOX noise gate | 2026-08-23 |
 | [0011](0011-asynchronous-monitor-handoff.md) | Asynchronous monitor teardown with serialized tuner handoff | 2026-08-23 |
+| [0012](0012-decoupled-reader-thread.md) | Decoupled reader thread so audio is produced at real time | 2026-08-23 |
+| [0013](0013-windowed-sinc-channel-filter.md) | Windowed-sinc channel filter evaluated polyphase | 2026-08-23 |
 
 Studies and alternatives investigated during these decisions live in
 [`../research/`](../research/) and [`../reasoning_logs/`](../reasoning_logs/).
