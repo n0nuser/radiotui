@@ -1,21 +1,36 @@
-"""Issue #8: every band in BANDS must be reachable by its number key.
+"""Built-in band keys stay stable while user bands use the overflow key.
 
 The TUI generates one numeric binding per band and dispatches generically,
 so bindings and actions can never drift apart again.
 """
 
-from radiotui.config import BANDS
+from radiotui.config import BANDS, BUILTIN_BAND_NAMES, Band
 from radiotui.tui.app import RadioTuiApp
 
 
 def numeric_band_bindings() -> list[tuple[str, str]]:
-    return [(str(i), name) for i, name in enumerate(sorted(BANDS)[:9], start=1)]
+    return [(str(i), name) for i, name in enumerate(BUILTIN_BAND_NAMES, start=1)]
 
 
 def test_numeric_keys_map_one_to_one_to_bands():
     pairs = numeric_band_bindings()
-    expected = [(str(i), name) for i, name in enumerate(sorted(BANDS), start=1)]
+    expected = [(str(i), name) for i, name in enumerate(BUILTIN_BAND_NAMES, start=1)]
     assert pairs == expected
+
+
+async def test_user_band_does_not_renumber_builtins():
+    BANDS["user_test"] = Band(
+        "user_test", "User test", 100e6, 101e6, BANDS["vhf_ham"].demod
+    )
+    try:
+        app = RadioTuiApp(force_sim=True)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("1")
+            assert app.band_name == BUILTIN_BAND_NAMES[0]
+            await pilot.press("0")
+            assert app.band_name == "user_test"
+    finally:
+        BANDS.pop("user_test")
 
 
 async def test_every_band_key_switches_band():
