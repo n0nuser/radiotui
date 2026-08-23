@@ -23,7 +23,7 @@ from radiotui.config import (
     THRESHOLD_MARGIN_RANGE,
     Band,
     Settings,
-    band_by_name,
+    band_for_region,
     band_needs_hf,
     clamp,
     effective_sample_rate,
@@ -54,7 +54,7 @@ console = Console()
 
 def resolve_band(args) -> Band:
     if args.band:
-        return band_by_name(args.band)
+        return band_for_region(args.band, args._settings.scanner.region)
     if args.start is not None and args.end is not None:
         if args.end <= args.start:
             console.print("[red]--end must be greater than --start[/red]")

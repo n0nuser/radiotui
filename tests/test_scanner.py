@@ -4,7 +4,14 @@ import queue
 import pytest
 
 from radiotui.cli import parse_freq
-from radiotui.config import BANDS, ScannerSettings, band_by_name, effective_sample_rate, enable_hf
+from radiotui.config import (
+    BANDS,
+    ScannerSettings,
+    band_by_name,
+    band_for_region,
+    effective_sample_rate,
+    enable_hf,
+)
 from radiotui.dsp.detector import ChannelTracker, NoiseFloorEstimator, extract_peaks
 from radiotui.dsp.spectrum import SweepPlan, compute_psd, frame_from_plan
 from radiotui.scanner.sweeper import Sweeper
@@ -32,7 +39,8 @@ def test_parse_freq_rejects_garbage():
 
 
 def test_band_lookup():
-    assert band_by_name("pmr446").end_hz == pytest.approx(446.09375e6)
+    assert band_by_name("pmr446").end_hz == pytest.approx(446.2e6)
+    assert band_for_region("vhf_ham", "r2").end_hz == pytest.approx(148e6)
     with pytest.raises(ValueError):
         band_by_name("nope")
 
