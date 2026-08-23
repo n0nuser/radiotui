@@ -16,9 +16,9 @@ bands on its own, estimates the noise floor, flags frequencies that show
   with persistence tracking: a channel only becomes "active" after it stays
   above the floor for several consecutive frames.
 - **Radio-first terminal UI** — opens like an FM radio: full-height spectrum
-  carousel over a waterfall, frequency ruler beneath, a bright tuning cursor
-  you walk with the arrow keys; channel table, log and clips pane are opt-in
-  (`t`), settings live in a menu (`m`).
+  carousel with the frequency ruler beneath it, a bright tuning cursor you walk
+  with the arrow keys, and a dial/RSSI meter under that; channel table, log and
+  recordings pane are opt-in (`t`/`c`), settings live in a menu (`m`).
 - **Listen & record** — NFM / WFM / AM demodulation in numpy, playback through
   `ffplay`/`aplay`, VOX-gated WAV recording of transmissions with an optional
   RF-carrier squelch gate so quiet channels stop producing hiss-only clips.
@@ -217,8 +217,11 @@ output and in CSV/JSON exports.
 
 ### TUI keys
 
-The TUI opens in the radio view: spectrum carousel over the waterfall with the
-frequency ruler beneath it.
+The TUI opens in the radio view: the spectrum carousel with the frequency ruler
+beneath it, and the dial plus signal meter below that. The status line shows
+`sweep #N hop 12/27` while a sweep is running and `paused` when it is not — a
+full pass takes seconds (27 hops on FM broadcast), so the display only redraws
+once per completed sweep.
 `←/→` walk the tuning cursor across the band, `↑/↓` coarse-step 100 kHz,
 `enter` plays what the cursor points at.
 
@@ -229,7 +232,7 @@ frequency ruler beneath it.
 | `enter` | radio view: listen under the cursor · panels: listen to selected row |
 | `l` | stop listening / replaying |
 | `s` | start / stop sweeping (refused while listening) |
-| `t` | show/hide analyst panels (channel table, log, clips) |
+| `t` | show/hide analyst panels (channel table, log, recordings) |
 | `m` | settings menu (threshold, dwell, min SNR, squelch, volume) |
 | `M` | mute / unmute |
 | `r` | record selected channel |
@@ -242,7 +245,7 @@ frequency ruler beneath it.
 | `b` | name (bookmark) the selected channel |
 | `x` | add the selected channel to the ignore list |
 | `Shift-X` | remove the ignore window at the selected frequency |
-| `c` | toggle the session clips pane (`enter` replays a clip) |
+| `c` | show the session recordings (`enter` replays a clip) |
 | `e` | export discovered channels to CSV |
 | `f` | tune an arbitrary frequency or sweep a custom range |
 | `a` | antenna advisor for selected channel |
