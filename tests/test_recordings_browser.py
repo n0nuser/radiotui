@@ -5,7 +5,7 @@ import wave
 from pathlib import Path
 
 import numpy as np
-from textual.widgets import DataTable, RichLog, Static
+from textual.widgets import DataTable, Static
 
 from radiotui.audio.demod import audio_to_pcm16
 from radiotui.audio.recorder import ClipInfo, VoxRecorder
@@ -214,6 +214,6 @@ async def test_startup_reports_resolved_recordings_directory(tmp_path):
     app = RadioTuiApp(force_sim=True, settings=Settings())
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        log_text = "\n".join(str(line) for line in app.query_one("#log", RichLog).lines)
-        assert "Recordings:" in log_text
-        assert str(Path("recordings").expanduser().resolve()) in log_text
+        events = "\n".join(app._events)
+        assert "Recordings:" in events
+        assert str(Path("recordings").expanduser().resolve()) in events

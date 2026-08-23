@@ -6,7 +6,6 @@ import time
 
 import numpy as np
 import pytest
-from textual.widgets import RichLog
 
 from radiotui.audio.recorder import VoxRecorder
 from radiotui.config import AudioSettings, ScannerSettings
@@ -151,10 +150,9 @@ def test_auto_hold_release_reason_paths(silent_for, expected):
 
 
 async def _hold_log_line(app) -> str:
-    log = app.query_one("#log", RichLog)
-    for line in reversed(log.lines):
-        if "releasing" in line.text:
-            return line.text
+    for event in reversed(app._events):
+        if "releasing" in event:
+            return event
     return ""
 
 

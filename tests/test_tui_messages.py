@@ -7,7 +7,7 @@ the ``@on`` decorator; these tests pin that behavior.
 
 import asyncio
 
-from textual.widgets import RichLog, Static
+from textual.widgets import Static
 
 from radiotui.core.models import DemodMode
 from radiotui.tui.app import RadioTuiApp
@@ -37,12 +37,11 @@ async def test_monitor_error_reaches_log() -> None:
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
-        log = app.query_one("#log", RichLog)
-        lines_before = len(log.lines)
+        count_before = len(app._events)
         app.post_message(RadioTuiApp.MonitorError("boom"))
         await pilot.pause(0.5)
-        assert len(log.lines) > lines_before
-        assert "boom" in log.lines[-1].text
+        assert len(app._events) > count_before
+        assert "boom" in app._events[-1]
 
 
 async def test_live_monitor_thread_updates_meter() -> None:

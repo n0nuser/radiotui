@@ -4,7 +4,7 @@ import csv
 import json
 
 import pytest
-from textual.widgets import DataTable, RichLog
+from textual.widgets import DataTable
 
 from radiotui.channels_file import (
     DEFAULT_IGNORE_WIDTH_HZ,
@@ -234,8 +234,7 @@ async def seed_table(app, *freqs):
 
 
 def log_text(app: RadioTuiApp) -> str:
-    lines = [str(line) for line in app.query_one("#log", RichLog).lines]
-    return "\n".join(lines)
+    return "\n".join(app._events)
 
 
 def table_cell(table: DataTable, row_key: str) -> str:

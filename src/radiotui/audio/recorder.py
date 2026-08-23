@@ -54,9 +54,11 @@ class VoxRecorder:
         freq_hz: float,
         settings: AudioSettings,
         context: dict | None = None,
+        squelch_rssi_dbfs: float | None = None,
     ) -> None:
         self._freq = freq_hz
         self._settings = settings
+        self._squelch_dbfs = squelch_rssi_dbfs
         self._dir = Path(settings.recordings_dir)
         self._file: wave.Wave_write | None = None
         self._path: Path | None = None
@@ -96,6 +98,8 @@ class VoxRecorder:
         level_dbfs = pcm_rms_dbfs(pcm)
         block_ms = 1000.0 * (len(pcm) / 2) / self._rate
         voiced = level_dbfs > self._settings.vox_threshold_dbfs
+        if self._squelch_dbfs is not None and (rssi_dbfs is None or rssi_dbfs < self._squelch_dbfs):
+            voiced = False  # RF gate: no carrier on frequency, however hot the hiss
         if voiced:
             self.last_voice_ts = time.time()
         if self._file is not None and rssi_dbfs is not None:

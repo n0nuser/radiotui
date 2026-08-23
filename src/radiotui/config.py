@@ -66,6 +66,9 @@ class ScannerSettings:
     hold_release_s: float = 4.0
     channel_cooldown_s: float = 45.0
     max_hold_s: float = 120.0
+    #: RF gate for recording: blocks below this are treated as silence
+    #: (None disables the gate). Raw tuner RSSI includes some LO-leak offset.
+    squelch_rssi_dbfs: float | None = None
 
 
 THRESHOLD_MARGIN_RANGE = (0.0, 40.0)

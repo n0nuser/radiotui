@@ -60,6 +60,7 @@ class AudioPlayer:
                     "1",
                     "-t",
                     "raw",
+                    "--buffer-size=65536",
                     "-",
                 ],
             ):

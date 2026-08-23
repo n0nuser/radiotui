@@ -6,6 +6,9 @@ import queue
 import threading
 import time
 import wave
+from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from rich.text import Text
@@ -33,11 +36,13 @@ from radiotui.channels_file import (
 from radiotui.config import (
     BANDS,
     DWELL_RANGE_S,
+    MIN_SNR_RANGE,
     THRESHOLD_MARGIN_RANGE,
     Band,
     Settings,
     band_needs_hf,
     clamp,
+    clamp_volume_db,
     effective_sample_rate,
     enable_hf,
 )
@@ -116,6 +121,7 @@ class HelpModal(ModalScreen):
 
 
 class TuneModal(ModalScreen):
+    AUTO_FOCUS = "Input"
     BINDINGS = [Binding("escape", "dismiss", "Cancel")]
 
     def compose(self) -> ComposeResult:
@@ -148,9 +154,90 @@ class AntennaModal(ModalScreen):
         yield Static(self._text, id="antenna-report")
 
 
-class NameModal(ModalScreen):
-    """Text input for naming a bookmarked channel; esc cancels."""
+@dataclass
+class SettingRow:
+    """One editable line of the settings menu: value read/applied live."""
 
+    label: str
+    get: Callable[[], float | None]
+    set: Callable[[float | None], None]
+    lo: float
+    hi: float
+    step: float
+    fmt: str
+    scale: float = 1.0  # display multiplier (e.g. seconds -> ms)
+    none_label: str = ""
+
+
+class SettingsModal(ModalScreen):
+    """Navigable list of the knobs a radio user actually touches (#23)."""
+
+    BINDINGS = [
+        Binding("escape,q", "dismiss", "Close"),
+        Binding("down,j", "next_item", show=False),
+        Binding("up,k", "prev_item", show=False),
+        Binding("right,l,+,=", "bigger", show=False),
+        Binding("left,h,-,_", "smaller", show=False),
+    ]
+
+    def __init__(self, rows: list[SettingRow], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._rows = rows
+        self._index = 0
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(Static("", id="settings-body"), id="settings-box")
+
+    def on_mount(self) -> None:
+        self._redraw()
+
+    def _current(self) -> SettingRow:
+        return self._rows[self._index]
+
+    def _nudge(self, direction: int) -> None:
+        row = self._current()
+        value = row.get()
+        if value is None:
+            value = row.lo if direction > 0 else row.hi
+        else:
+            value = value + direction * row.step * row.scale
+            if (value < row.lo or value > row.hi) and row.none_label:
+                value = None  # stepped past the end: switch off
+            elif value < row.lo or value > row.hi:
+                return
+        row.set(None if value is None else round(clamp(value, row.lo, row.hi), 3))
+        self.app.refresh_status()
+        self._redraw()
+
+    def action_bigger(self) -> None:
+        self._nudge(+1)
+
+    def action_smaller(self) -> None:
+        self._nudge(-1)
+
+    def action_next_item(self) -> None:
+        self._index = (self._index + 1) % len(self._rows)
+        self._redraw()
+
+    def action_prev_item(self) -> None:
+        self._index = (self._index - 1) % len(self._rows)
+        self._redraw()
+
+    def _redraw(self) -> None:
+        lines = Text()
+        for i, row in enumerate(self._rows):
+            marker = "▶ " if i == self._index else "  "
+            value = row.get()
+            shown = row.none_label if value is None else row.fmt.format(value * row.scale)
+            style = "bold cyan" if i == self._index else ""
+            lines.append(f"{marker}{row.label:<20}", style=style)
+            lines.append(f"{shown:>10}\n", style=style)
+        lines.append("\n↑/↓ select · ←/→ adjust · esc close", style="dim")
+        self.query_one("#settings-body", Static).update(lines)
+
+
+class NameModal(ModalScreen):
+    AUTO_FOCUS = "Input"
     BINDINGS = [Binding("escape", "dismiss", "Cancel")]
 
     def __init__(self, hint: str, initial: str = "", **kwargs) -> None:
@@ -170,16 +257,20 @@ class NameModal(ModalScreen):
 
 
 class RadioTuiApp(App):
+    # The hidden-by-default channel table must not grab focus on mount,
+    # or it eats every key (arrows/enter) in the radio view.
+    AUTO_FOCUS = None
     TITLE = "radiotui"
     SUB_TITLE = "autonomous spectrum scanner"
     CSS = """
     Screen { layout: vertical; }
-    #spectrum { height: 12; border: round #3b4d8f; }
-    #waterfall { height: 14; border: round #3b4d8f; }
-    #main { height: 1fr; }
+    #spectrum { height: 1fr; border: round #3b4d8f; }
+    #waterfall { height: 1fr; border: round #3b4d8f; }
+    #meter { height: 7; border: round #3b4d8f; content-align: center middle; padding: 0 1; }
+    #main { height: 14; display: none; }
+    #main.shown { display: block; }
     #channels { width: 2fr; border: round #3b4d8f; }
     #sidepanel { width: 1fr; layout: vertical; }
-    #meter { height: 7; border: round #3b4d8f; content-align: center middle; padding: 0 1; }
     #log { height: 1fr; border: round #3b4d8f; }
     #clips { height: 1fr; border: round #3b4d8f; display: none; }
     #clips.shown { display: block; }
@@ -192,15 +283,23 @@ class RadioTuiApp(App):
     NameModal { align: center middle; background: #000000cc; }
     #name-box { width: 60; border: thick magenta; padding: 1 2; background: $surface; }
     #name-hint { color: $text-muted; padding-top: 1; }
+    SettingsModal { align: center middle; background: #000000cc; }
+    #settings-box { width: 56; border: thick green; padding: 1 2; background: $surface; }
     """
     BINDINGS = [
         Binding("s", "toggle_sweep", "Sweep"),
         Binding("enter", "listen", "Listen"),
         Binding("l", "stop_listen", "Stop"),
-        Binding("m", "mute", "Mute"),
+        Binding("M", "mute", "Mute", key_display="M"),
         Binding("r", "record", "Record"),
-        Binding("n", "next_channel", "Next"),
-        Binding("p", "prev_channel", "Prev"),
+        Binding("n", "next_channel", "Next", show=False),
+        Binding("p", "prev_channel", "Prev", show=False),
+        Binding("right", "cursor_right", "Tune+", key_display="→"),
+        Binding("left", "cursor_left", "Tune-", key_display="←"),
+        Binding("up", "cursor_up", "Coarse+", key_display="↑", show=False),
+        Binding("down", "cursor_down", "Coarse-", key_display="↓", show=False),
+        Binding("t", "toggle_advanced", "Panels", key_display="t"),
+        Binding("m", "settings", "Menu"),
         Binding("comma", "toggle_sort", "Sort", key_display=",", show=False),
         Binding("plus", "gain_up", "Gain+", key_display="+"),
         Binding("minus", "gain_down", "Gain-", key_display="-"),
@@ -212,7 +311,7 @@ class RadioTuiApp(App):
         Binding("left_curly_bracket", "dwell_down", "Dwell-", key_display="{", show=False),
         Binding("a", "antenna", "Antenna"),
         Binding("o", "toggle_autonomous", "Auto"),
-        Binding("e", "export_channels", "Export"),
+        Binding("e", "export_channels", "Export", show=False),
         Binding("f", "tune", "Freq"),
         Binding("b", "bookmark", "Name"),
         Binding("x", "ignore_channel", "Ignore"),
@@ -279,9 +378,12 @@ class RadioTuiApp(App):
         self.last_rssi: float | None = None
         self._peak_rssi: float = -120.0
         self._ignore_rssi = False
+        self._last_meter_paint = 0.0
         self.user_channels = UserChannels()
         self.session_clips: list = []
         self._channel_bw_hz: float | None = None
+        self.cursor_hz: float | None = None
+        self._events: deque[str] = deque(maxlen=300)
         self._replay_player: AudioPlayer | None = None
         self._replay_thread: threading.Thread | None = None
 
@@ -289,10 +391,10 @@ class RadioTuiApp(App):
         yield Header(show_clock=True)
         yield SpectrumBar(id="spectrum")
         yield Waterfall(id="waterfall")
+        yield Static("", id="meter")
         with Horizontal(id="main"):
             yield DataTable(id="channels", cursor_type="row")
             with Vertical(id="sidepanel"):
-                yield Static("", id="meter")
                 yield RichLog(id="log", highlight=False, markup=True)
                 yield DataTable(id="clips", cursor_type="row")
         yield Footer()
@@ -366,6 +468,7 @@ class RadioTuiApp(App):
             f"Recordings: {Path(self.settings.audio.recordings_dir).expanduser().resolve()}"
         )
         self.start_band(self.band_name)
+        self.refresh_status()
 
     def start_band(self, band_name: str) -> None:
         self._start_sweep(BANDS[band_name], band_name)
@@ -374,6 +477,10 @@ class RadioTuiApp(App):
         self.band_name = name or "custom"
         self.band_label = band.label
         self._channel_bw_hz = band.channel_bw_hz
+        if self.plan is None or (
+            self.cursor_hz is None or not (self.plan.start_hz <= self.cursor_hz <= self.plan.end_hz)
+        ):
+            self.cursor_hz = (band.start_hz + band.end_hz) / 2
         if self.sweeper is not None:
             self.sweeper.stop()
         waterfall = self.query_one("#waterfall", Waterfall)
@@ -401,7 +508,11 @@ class RadioTuiApp(App):
         )
 
     def log_line(self, text: str) -> None:
-        self.query_one("#log", RichLog).write(text)
+        # The log pane lives in the advanced panels and may be display:none;
+        # keep the canonical history on the app so nothing is lost while hidden.
+        self._events.append(text)
+        if self._main_shown():
+            self.query_one("#log", RichLog).write(text)
 
     def poll_queue(self) -> None:
         latest: ScanState | None = None
@@ -426,7 +537,7 @@ class RadioTuiApp(App):
             # gone and queries resolve against a bare default screen.
             return
         active_freqs = [ch.center_hz for ch in latest.channels]
-        selected_hz = self.selected_key()
+        selected_hz = self.cursor_hz
         spectrum.update_frame(
             latest.frame.freqs_hz,
             latest.frame.power_db,
@@ -570,6 +681,10 @@ class RadioTuiApp(App):
             count = len(self.session_clips)
             parts.append(f"{count} clip{'s' if count != 1 else ''}")
         lines = [Text.from_markup(" │ ".join(parts))]
+        tuned = self.monitor.freq_hz if self.monitor is not None else self.cursor_hz
+        if tuned is not None:
+            # The dial: the number a radio user actually cares about, on top.
+            lines.insert(0, Text(f" ▶ {tuned / 1e6:.3f} MHz ", style="bold cyan"))
         if self.last_rssi is not None:
             if self.monitor is not None:
                 lines.append(Text(f"{self.monitor.freq_hz / 1e6:.4f} MHz"))
@@ -621,6 +736,126 @@ class RadioTuiApp(App):
             self._replay_selected_clip()
             return
         self.action_listen()
+
+    def _main_shown(self) -> bool:
+        return self.query_one("#main").has_class("shown")
+
+    def action_toggle_advanced(self) -> None:
+        main = self.query_one("#main")
+        if main.has_class("shown"):
+            main.remove_class("shown")
+            self.log_line("Analyst panels hidden - radio view")
+        else:
+            main.add_class("shown")
+            self.query_one("#channels", DataTable).focus()
+            log_widget = self.query_one("#log", RichLog)
+            for line in list(self._events)[-50:]:
+                log_widget.write(line)
+            if self._last_channels:
+                self.refresh_table(self._last_channels)
+            self.log_line(f"Analyst panels shown ({len(self.session_clips)} clip(s))")
+
+    def _cursor_step_hz(self) -> float:
+        if self.plan is None:
+            return 25_000.0
+        try:
+            width = max(self.query_one("#spectrum", SpectrumBar).size.width - 2, 8)
+        except NoMatches:
+            return 25_000.0
+        span = self.plan.end_hz - self.plan.start_hz
+        return max(span / width, 100.0)
+
+    def _move_cursor(self, delta_hz: float) -> None:
+        if self.plan is None or self.cursor_hz is None:
+            return
+        lo, hi = self.plan.start_hz, self.plan.end_hz
+        self.cursor_hz = round(clamp(self.cursor_hz + delta_hz, lo, hi), 0)
+        spectrum = self.query_one("#spectrum", SpectrumBar)
+        spectrum.selected_hz = self.cursor_hz
+        spectrum.refresh()
+        self.refresh_status()
+
+    def action_cursor_right(self) -> None:
+        self._move_cursor(+self._cursor_step_hz())
+
+    def action_cursor_left(self) -> None:
+        self._move_cursor(-self._cursor_step_hz())
+
+    def action_cursor_up(self) -> None:
+        self._move_cursor(+100_000.0)
+
+    def action_cursor_down(self) -> None:
+        self._move_cursor(-100_000.0)
+
+    def action_settings(self) -> None:
+        self.push_screen(SettingsModal(self._setting_rows()))
+
+    def _setting_rows(self) -> list[SettingRow]:
+        scanner, audio = self.settings.scanner, self.settings.audio
+
+        def set_threshold(v: float) -> None:
+            scanner.threshold_margin_db = clamp(v, *THRESHOLD_MARGIN_RANGE)
+
+        def set_dwell(v: float) -> None:
+            scanner.hop_dwell_s = clamp(v, *DWELL_RANGE_S)
+
+        def set_snr(v: float) -> None:
+            scanner.min_snr_db = clamp(v, *MIN_SNR_RANGE)
+
+        def set_squelch(v: float | None) -> None:
+            scanner.squelch_rssi_dbfs = None if v is None else clamp(v, -70.0, -10.0)
+
+        def set_volume(v: float) -> None:
+            audio.volume_db = clamp_volume_db(v)
+            if self.monitor is not None:
+                self.monitor.set_volume_db(audio.volume_db)
+
+        return [
+            SettingRow(
+                "Threshold margin",
+                lambda: scanner.threshold_margin_db,
+                set_threshold,
+                *THRESHOLD_MARGIN_RANGE,
+                1.0,
+                "{:+.1f} dB",
+            ),
+            SettingRow(
+                "Hop dwell",
+                lambda: scanner.hop_dwell_s,
+                set_dwell,
+                *DWELL_RANGE_S,
+                0.02,
+                "{:.0f} ms",
+                scale=1000.0,
+            ),
+            SettingRow(
+                "Min SNR",
+                lambda: scanner.min_snr_db,
+                set_snr,
+                *MIN_SNR_RANGE,
+                1.0,
+                "{:.0f} dB",
+            ),
+            SettingRow(
+                "Squelch (RF gate)",
+                lambda: scanner.squelch_rssi_dbfs,
+                set_squelch,
+                -70.0,
+                -10.0,
+                5.0,
+                "{:.0f} dBFS",
+                none_label="off (VOX only)",
+            ),
+            SettingRow(
+                "Volume",
+                lambda: audio.volume_db,
+                set_volume,
+                -60.0,
+                12.0,
+                3.0,
+                "{:+.0f} dB",
+            ),
+        ]
 
     def action_toggle_clips(self) -> None:
         clips = self.query_one("#clips", DataTable)
@@ -697,6 +932,10 @@ class RadioTuiApp(App):
     def action_listen(self) -> None:
         if len(self.screen_stack) > 1:
             return  # a modal owns the keyboard (priority bindings fire before it)
+        if not self._main_shown() and self.cursor_hz is not None:
+            # Radio view: enter tunes what the dial cursor points at.
+            self.listen_frequency(self.cursor_hz)
+            return
         channel = self.selected_channel()
         if channel is None:
             self.log_line("[yellow]No channel selected.[/yellow]")
@@ -1013,8 +1252,13 @@ class RadioTuiApp(App):
         if self._ignore_rssi:
             return  # stale reading from a monitor that was just stopped
         self.last_rssi = message.rssi_dbfs
-        self._peak_rssi = max(self._peak_rssi * 0.995, message.rssi_dbfs)
-        self.refresh_status()
+        now = time.monotonic()
+        # Repainting the meter for every block starves the audio thread of the
+        # GIL; a quarter-Hz status cadence is plenty for a human meter.
+        if now - self._last_meter_paint >= 0.25:
+            self._last_meter_paint = now
+            self._peak_rssi = max(self._peak_rssi * 0.995, message.rssi_dbfs)
+            self.refresh_status()
 
     @on(MonitorError)
     def on_monitor_error(self, message: RadioTuiApp.MonitorError) -> None:

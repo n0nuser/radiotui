@@ -70,6 +70,7 @@ class ChannelMonitor:
                     "sample_rate_hz": effective_sample_rate(scanner),
                 },
             },
+            squelch_rssi_dbfs=scanner.squelch_rssi_dbfs,
         )
         self.muted = muted
         self.rssi_dbfs: float = -120.0

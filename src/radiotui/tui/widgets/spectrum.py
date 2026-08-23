@@ -12,6 +12,7 @@ from radiotui.tui.widgets.axis import axis_segments
 
 BLOCKS = " ▁▂▃▄▅▆▇█"
 COLD_STYLE = Style.parse("#3b4d8f")
+CURSOR_STYLE = Style.parse("#ffffff bold")
 HOT_GRADIENT = ["#00e676", "#76ff03", "#ffee58", "#ff9800", "#ff5722", "#e91e63"]
 HOT_STYLES = [Style.parse(c) for c in HOT_GRADIENT]
 HOT_BOLD_STYLES = [Style.parse(c + " bold") for c in HOT_GRADIENT]
@@ -66,10 +67,11 @@ class SpectrumBar(Widget):
         db_lo = self.floor_db - 5.0
         db_hi = max(self.floor_db + 45.0, float(np.max(self.power)))
         level_row = height - 2 - y
+        cursor_column = self._cursor_column(width)
 
         cols = np.array_split(np.arange(len(self.freqs)), width)
         segments: list[Segment] = []
-        for bin_idx in cols:
+        for column_index, bin_idx in enumerate(cols):
             if len(bin_idx) == 0:
                 segments.append(Segment(" ", None))
                 continue
@@ -78,18 +80,32 @@ class SpectrumBar(Widget):
             frac = min(max(frac, 0.0), 1.0)
             bar_height = frac * (height - 1)
             if bar_height < level_row + 0.001:
-                segments.append(Segment(" ", None))
+                if column_index == cursor_column:
+                    segments.append(Segment("│", CURSOR_STYLE))
+                else:
+                    segments.append(Segment(" ", None))
                 continue
             block_idx = min(int((bar_height - level_row) * 8), 7)
             char = BLOCKS[block_idx]
             is_active = self._column_active(bin_idx)
-            if peak_db >= self.threshold_db:
+            if column_index == cursor_column:
+                style = CURSOR_STYLE
+            elif peak_db >= self.threshold_db:
                 hot_idx = min(int((peak_db - self.threshold_db) / 12.0), len(HOT_STYLES) - 1)
                 style = HOT_BOLD_STYLES[hot_idx] if is_active else HOT_STYLES[hot_idx]
             else:
                 style = COLD_STYLE
             segments.append(Segment(char, style))
         return Strip(segments, width)
+
+    def _cursor_column(self, width: int) -> int:
+        if self.selected_hz is None or len(self.freqs) < 2 or width < 2:
+            return -1
+        lo = float(self.freqs[0])
+        span = float(self.freqs[-1]) - lo
+        if span <= 0:
+            return -1
+        return int(round((self.selected_hz - lo) / span * (width - 1)))
 
     def _column_active(self, bin_idx: np.ndarray) -> bool:
         lo = float(self.freqs[bin_idx[0]])

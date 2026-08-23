@@ -6,8 +6,6 @@ import subprocess
 import sys
 from datetime import datetime
 
-from textual.widgets import RichLog
-
 from radiotui.core.models import Channel, DemodMode
 from radiotui.export import export_channels, export_path_for
 from radiotui.tui.app import RadioTuiApp
@@ -107,8 +105,7 @@ async def test_tui_e_key_exports_and_logs(tmp_path):
         await pilot.pause(0.3)
         files = list(tmp_path.glob("radiotui-*.csv"))
         assert len(files) == 1
-        log = app.query_one("#log", RichLog)
-        assert any("Exported" in line.text for line in log.lines)
+        assert any("Exported" in event for event in app._events)
 
 
 async def test_tui_e_key_without_channels_is_a_noop(tmp_path):
