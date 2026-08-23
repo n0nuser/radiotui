@@ -154,7 +154,7 @@ radiotui record 446.00625e6    # VOX-record transmissions to WAV
 radiotui scan --ppm -70        # correct crystal error (see measurement below)
 radiotui scan --autonomous --export findings.json   # soak + machine-readable results
 radiotui antenna 145.500e6     # antenna advisor report
-radiotui tuner                 # live signal bar to optimize the antenna
+  radiotui tuner 145.5M          # live signal bar to optimize the antenna
 radiotui devices               # list detected SDR hardware
 ```
 
@@ -193,7 +193,8 @@ demod = "nfm"
 
 `~/.config/radiotui/channels.toml` names the frequencies you care about and
 silences the ones you don't.
-Press `b` in the TUI to name the selected channel, `x` to ignore it — both
+Press `b` in the TUI to name the selected channel, `x` to ignore it, and `Shift-X`
+to remove an ignore window at the selected frequency — both
 write this file immediately.
 
 ```toml
@@ -238,13 +239,14 @@ frequency ruler beneath it.
 | `,` | sort table by frequency / peak |
 | `b` | name (bookmark) the selected channel |
 | `x` | add the selected channel to the ignore list |
+| `Shift-X` | remove the ignore window at the selected frequency |
 | `c` | toggle the session clips pane (`enter` replays a clip) |
 | `e` | export discovered channels to CSV |
 | `f` | tune an arbitrary frequency or sweep a custom range |
 | `a` | antenna advisor for selected channel |
 | `o` | autonomous scan-and-hold on / off |
 | `?` | help overlay generated from these bindings |
-| number keys | jump between band presets (1-9) |
+| number keys | jump between the first nine band presets (1-9) |
 | `q` | quit / close overlay |
 
 While listening, sweeping stays paused by design: one tuner, one consumer.
