@@ -321,3 +321,19 @@ async def test_x_ignores_selected_channel_and_persists(tmp_path):
         assert warning is None
         assert saved.ignores == [IgnoreEntry(145.5e6)]
         assert "ignored" in log_text(app)
+
+
+async def test_shift_x_unignores_selected_channel(tmp_path):
+    path = book_path(tmp_path)
+    path.write_text("[[ignore]]\nfreq_hz = 145500000\n", encoding="utf-8")
+    app = RadioTuiApp(force_sim=True, channels_path=path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause(0.1)
+        channels = await seed_table(app, 145.5e6)
+        app.refresh_table(channels)
+        await pilot.press("X")
+        await pilot.pause(0.2)
+        saved, warning = load_user_channels(path)
+        assert warning is None
+        assert saved.ignores == []
+        assert "unignored" in log_text(app)
