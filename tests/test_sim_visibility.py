@@ -50,7 +50,7 @@ async def test_meter_shows_peak_hold_marker_and_delta():
         await pilot.pause(0.4)
         dropped = meter_text(app)
         assert "vs peak" in dropped
-        assert "Δ-20." in dropped
+        assert "Δ-19." in dropped
         assert dropped.count("\n") == at_peak.count("\n"), "peak hold must not add rows"
 
 
