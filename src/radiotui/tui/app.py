@@ -1051,12 +1051,23 @@ class RadioTuiApp(App):
     def stop_monitor(self, resume_sweep: bool = True) -> None:
         if self.monitor is not None:
             self._ignore_rssi = True  # the stopping thread may still post readings
-            self.monitor.stop()
+            monitor = self.monitor
             self.monitor = None
             self.last_rssi = None
             self._peak_rssi = -120.0
             self.log_line("Monitor stopped")
-        if resume_sweep and self.resume_sweep_after_listen:
+
+            def finish_stop() -> None:
+                monitor.stop()
+                if resume_sweep and self.resume_sweep_after_listen:
+                    self.call_from_thread(self._resume_sweep)
+
+            self.run_worker(finish_stop, thread=True, exit_on_error=False)
+        elif resume_sweep:
+            self._resume_sweep()
+
+    def _resume_sweep(self) -> None:
+        if self.resume_sweep_after_listen:
             self.resume_sweep_after_listen = False
             if self.sweeper is not None:
                 self.sweeper.start()
