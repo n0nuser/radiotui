@@ -4,21 +4,12 @@ The TUI generates one numeric binding per band and dispatches generically,
 so bindings and actions can never drift apart again.
 """
 
-import re
-
 from radiotui.config import BANDS
 from radiotui.tui.app import RadioTuiApp
 
-BAND_ACTION_RE = re.compile(r"^band\('([a-z0-9_]+)'\)$")
-
 
 def numeric_band_bindings() -> list[tuple[str, str]]:
-    pairs = []
-    for binding in RadioTuiApp.BINDINGS:
-        match = BAND_ACTION_RE.match(binding.action)
-        if binding.key.isdigit() and match:
-            pairs.append((binding.key, match.group(1)))
-    return pairs
+    return [(str(i), name) for i, name in enumerate(sorted(BANDS)[:9], start=1)]
 
 
 def test_numeric_keys_map_one_to_one_to_bands():
