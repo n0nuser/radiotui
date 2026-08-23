@@ -31,6 +31,8 @@ BANDS: dict[str, Band] = {
     "uhf_ham": Band("uhf_ham", "70cm Amateur", 430.0e6, 440.0e6, DemodMode.NFM),
 }
 
+BUILTIN_BAND_NAMES = tuple(BANDS)
+
 REGIONAL_BAND_EDGES = {
     "r1": {
         "hf_ham_80m": (3.5e6, 3.8e6), "hf_ham_40m": (7.0e6, 7.2e6),
