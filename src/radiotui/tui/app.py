@@ -67,12 +67,8 @@ def _key_label(binding: Binding) -> str:
     return KEY_DISPLAYS.get(binding.key, binding.key)
 
 
-def _band_key(name: str) -> int:
-    return sorted(BANDS).index(name) + 1
-
-
 def _is_band_binding(binding: Binding) -> bool:
-    return binding.action.startswith("band(")
+    return binding.action.startswith("band_key(")
 
 
 def build_help_text() -> Text:
@@ -100,7 +96,7 @@ def build_help_text() -> Text:
         text.append(f"{lk:<{width_l}}  {ld:<28}{rk:<{width_r}}  {rd}\n")
     text.append("\nBand presets\n", style="bold")
     row_count = 0
-    for i, name in enumerate(sorted(BANDS), start=1):
+    for i, name in enumerate(sorted(BANDS)[:9], start=1):
         text.append(str(i), style="cyan")
         text.append(f" {BANDS[name].label:<18}")
         row_count += 1
@@ -319,9 +315,6 @@ class RadioTuiApp(App):
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit", priority=True),
     ]
-    for i, name in enumerate(sorted(BANDS), start=1):
-        BINDINGS.append(Binding(str(i), f"band('{name}')", BANDS[name].label, show=False))
-
     class RssiUpdate(Message):
         def __init__(self, rssi_dbfs: float) -> None:
             super().__init__()
@@ -506,6 +499,8 @@ class RadioTuiApp(App):
         )
         self.sweeper = Sweeper(self.device, self.plan, self.settings.scanner, self.queue)
         self.sweeper.set_user_channels(self.user_channels)
+        for i, name in enumerate(sorted(BANDS)[:9], start=1):
+            self.bind(str(i), f"band_key('{name}')", description=BANDS[name].label, show=False)
         if self._start_sweeper:
             self.sweeper.start()
         self.log_line(
@@ -1287,6 +1282,10 @@ class RadioTuiApp(App):
 
     def action_band(self, name: str) -> None:
         self.start_band(name)
+
+    def action_band_key(self, name: str) -> None:
+        if name in BANDS:
+            self.start_band(name)
 
 
 def run_tui(
