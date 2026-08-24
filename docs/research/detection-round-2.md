@@ -472,8 +472,8 @@ Offset tuning is correctly reported as unsupported: it is an E4000 feature, and
 | [#52](https://github.com/n0nuser/radiotui/issues/52) | Stands. Two corrections from prior art: the noise squelch must be a **ratio**, and CTCSS needs **guard bands**. |
 | [#53](https://github.com/n0nuser/radiotui/issues/53) | Reshaped. Per-hop **normalisation**, not per-hop windowing — measured, the latter is worse than doing nothing. |
 | [#54](https://github.com/n0nuser/radiotui/issues/54) | Unaffected, but §5 adds a second NFM audio defect in the same path. |
-| new | NFM audio low-pass + polyphase resampler (§5) |
-| new | Dither hop centres so the DC mask stops blinding fixed channels (§6) |
+| [#55](https://github.com/n0nuser/radiotui/issues/55) | New. NFM audio low-pass + polyphase resampler (§5) |
+| [#56](https://github.com/n0nuser/radiotui/issues/56) | New. Dither hop centres so the DC mask stops blinding fixed channels (§6) |
 
 Not recommended: CFAR, SumThreshold, eigenvalue detection. Spectral kurtosis is
 worth keeping in mind for impulse rejection but is not a detector upgrade.
