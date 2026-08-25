@@ -1,4 +1,4 @@
-"""Issue #10: shared frequency axis under the spectrum and on the waterfall."""
+"""Issue #10: frequency axis rendered under the spectrum."""
 
 import numpy as np
 from rich.segment import Segment
@@ -73,26 +73,6 @@ async def test_spectrum_bottom_row_is_the_axis():
         bars = spectrum.render_line(height - 3)
         assert "┴" in axis.text
         assert "┴" not in bars.text
-
-
-async def test_waterfall_bottom_row_is_the_axis_oldest_row_gone():
-    app = RadioTuiApp(force_sim=True)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
-        await pilot.pause(0.3)
-        waterfall = app.query_one("#waterfall")
-        freqs = np.linspace(87.5e6, 108e6, 256)
-        power = np.full_like(freqs, -55.0)
-        waterfall.push_frame(freqs, power, -62.0)
-        waterfall.push_frame(freqs + 1e3, power, -62.0)
-        height = waterfall.size.height
-        bottom = waterfall.render_line(height - 1)
-        above = waterfall.render_line(height - 2)
-        assert "┴" in bottom.text
-        assert "┴" not in above.text
-        assert above.text.strip() != ""
 
 
 async def test_meter_reports_the_db_window_in_use():

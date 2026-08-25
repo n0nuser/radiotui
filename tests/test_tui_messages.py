@@ -63,6 +63,42 @@ async def test_live_monitor_thread_updates_meter() -> None:
         assert "RSSI" in meter
 
 
+async def test_monitor_error_on_dead_thread_drops_monitor_and_notifies() -> None:
+    """A fatal reader-thread death must not leave the UI claiming to listen.
+
+    Regression test: previously ``self.monitor`` stayed set after the reader
+    thread died, so the status bar kept showing "listening" with a frozen
+    meter and the only trace of the failure was a log line that is easy to
+    miss when the log pane is hidden.
+    """
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        app.start_monitor(100_000_000, DemodMode.WFM, muted=True, enable_recorder=False)
+        await pilot.pause(0.2)
+        assert app.monitor is not None
+        app.monitor._thread = None  # simulate the reader/consumer thread having died
+        app.post_message(RadioTuiApp.MonitorError("read failed: device gone"))
+        await pilot.pause(0.5)
+        assert app.monitor is None
+        meter = str(app.query_one("#meter", Static).render())
+        assert "listening" not in meter
+
+
+async def test_monitor_error_while_alive_does_not_drop_monitor() -> None:
+    """A non-fatal warning (e.g. no audio backend) must not tear down a live monitor."""
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        app.start_monitor(100_000_000, DemodMode.WFM, muted=True, enable_recorder=False)
+        await pilot.pause(0.2)
+        assert app.monitor is not None
+        app.post_message(RadioTuiApp.MonitorError("no audio backend found"))
+        await pilot.pause(0.5)
+        assert app.monitor is not None
+        app.stop_monitor()
+
+
 async def test_autonomous_toggle_flips_setting_and_status() -> None:
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(120, 40)) as pilot:

@@ -1,9 +1,18 @@
-"""Live channel monitor: tune, demodulate, play and record."""
+"""Live channel monitor: tune, demodulate, play and record.
+
+Reading and processing run on separate threads. A synchronous device read is
+paced by the hardware — a 65536-sample block at 1.024 MS/s takes 64 ms no
+matter what — so doing the demodulation after it in the same loop makes each
+iteration cost 64 ms + processing while yielding only 64 ms of audio. That
+few-percent deficit drains the player's buffer and stalls it every few
+seconds. The reader thread keeps the device drained while the consumer
+demodulates the previous block, so audio is produced at real time.
+"""
 
 from __future__ import annotations
 
+import queue
 import threading
-import time
 
 from radiotui.audio.demod import (
     DemodState,
@@ -54,6 +63,9 @@ class ChannelMonitor:
         self._demod_state = DemodState()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._reader: threading.Thread | None = None
+        self._blocks: queue.Queue = queue.Queue(maxsize=2)
+        self._read_error: Exception | None = None
         self.player = AudioPlayer(settings.audio.output_rate_hz)
         scanner = settings.scanner
         self.recorder = VoxRecorder(
@@ -105,16 +117,26 @@ class ChannelMonitor:
             if not self.player.start():
                 if self.on_error:
                     self.on_error("no audio backend found: install ffmpeg or alsa-utils")
+        # Two blocks of slack: enough to ride out a slow demodulation without
+        # letting stale radio pile up behind the speaker.
+        self._blocks = queue.Queue(maxsize=2)
+        self._read_error = None
+        self._reader = threading.Thread(
+            target=self._read_loop, name=f"reader-{self._freq_hz / 1e6:.3f}", daemon=True
+        )
         self._thread = threading.Thread(
             target=self._run, name=f"monitor-{self._freq_hz / 1e6:.3f}", daemon=True
         )
+        self._reader.start()
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-            self._thread = None
+        for thread in (self._reader, self._thread):
+            if thread is not None:
+                thread.join(timeout=5.0)
+        self._reader = None
+        self._thread = None
         self.recorder.stop()
         self.player.stop()
 
@@ -138,17 +160,47 @@ class ChannelMonitor:
         gain = 10.0 ** (self._settings.audio.volume_db / 20.0)
         return scale_pcm16(pcm, gain)
 
-    def _run(self) -> None:
+    def _read_loop(self) -> None:
+        """Keep the device drained; never do arithmetic on this thread."""
         block = self._settings.audio.block_size
-        fs = effective_sample_rate(self._settings.scanner)
-        rate = self._settings.audio.output_rate_hz
         while not self._stop.is_set():
-            t0 = time.time()
             try:
                 iq = self._device.read_samples(block)
             except (OSError, RuntimeError, ValueError) as exc:
+                # Record before handing over: if the queue is full because the
+                # consumer is briefly wedged, the put times out and the only
+                # evidence of the failure would otherwise be discarded, leaving
+                # a live-looking monitor that is silent forever.
+                self._read_error = exc
+                try:
+                    self._blocks.put(exc, timeout=1.0)
+                except queue.Full:
+                    pass
+                return
+            try:
+                self._blocks.put(iq, timeout=1.0)
+            except queue.Full:
+                # The consumer is wedged; dropping is better than stalling the
+                # reader, which would let the device's own buffer overflow.
+                continue
+
+    def _run(self) -> None:
+        fs = effective_sample_rate(self._settings.scanner)
+        rate = self._settings.audio.output_rate_hz
+        while not self._stop.is_set():
+            try:
+                iq = self._blocks.get(timeout=1.0)
+            except queue.Empty:
+                if self._reader is not None and not self._reader.is_alive():
+                    # The reader died without managing to hand its error over.
+                    # Staying in this loop would look like listening forever.
+                    if self.on_error:
+                        self.on_error(f"read failed: {self._read_error or 'reader stopped'}")
+                    break
+                continue
+            if isinstance(iq, Exception):
                 if self.on_error:
-                    self.on_error(f"read failed: {exc}")
+                    self.on_error(f"read failed: {iq}")
                 break
             self.rssi_dbfs = rssi_dbfs(iq)
             if self.on_rssi:
@@ -167,7 +219,5 @@ class ChannelMonitor:
                 if not self.muted:
                     self.player.write(self._playback_pcm(pcm))
                 self.recorder.feed(pcm, rate, rssi_dbfs=self.rssi_dbfs)
-            elapsed = time.time() - t0
-            budget = block / fs
-            if elapsed < budget:
-                time.sleep(budget - elapsed)
+            # No pacing here: the reader thread is already paced by the device,
+            # and sleeping would only add to the deficit this split removes.

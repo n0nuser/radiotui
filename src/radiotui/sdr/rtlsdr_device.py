@@ -25,6 +25,16 @@ except (ImportError, AttributeError, OSError) as exc:
     _IMPORT_ERROR = str(exc)
 
 
+def binding_status() -> tuple[bool, str]:
+    """Whether the pyrtlsdr binding imported, and the reason if it did not.
+
+    The distinction matters when diagnosing "no hardware": a missing module is
+    an install problem, an unloadable shared library is a system problem, and
+    they need different fixes.
+    """
+    return _HAS_RTLSDR, _IMPORT_ERROR
+
+
 class RtlSdrDevice(SdrDevice):
     name = "rtl-sdr"
     is_real = True

@@ -16,9 +16,9 @@ bands on its own, estimates the noise floor, flags frequencies that show
   with persistence tracking: a channel only becomes "active" after it stays
   above the floor for several consecutive frames.
 - **Radio-first terminal UI** — opens like an FM radio: full-height spectrum
-  carousel over a waterfall, frequency ruler beneath, a bright tuning cursor
-  you walk with the arrow keys; channel table, log and clips pane are opt-in
-  (`t`), settings live in a menu (`m`).
+  carousel with the frequency ruler beneath it, a bright tuning cursor you walk
+  with the arrow keys, and a dial/RSSI meter under that; channel table, log and
+  recordings pane are opt-in (`t`/`c`), settings live in a menu (`m`).
 - **Listen & record** — NFM / WFM / AM demodulation in numpy, playback through
   `ffplay`/`aplay`, VOX-gated WAV recording of transmissions with an optional
   RF-carrier squelch gate so quiet channels stop producing hiss-only clips.
@@ -46,14 +46,32 @@ bands on its own, estimates the noise floor, flags frequencies that show
 
 ## Install
 
+Pick **one** of these — they are alternatives, not steps:
+
 ```bash
-uv sync --group dev            # core (simulator mode)
-uv sync --group dev --extra sdr  # + pyrtlsdr for real hardware
+uv sync --group dev --extra sdr  # real hardware (also runs the simulator)
+uv sync --group dev              # simulator only, no pyrtlsdr
 ```
+
+> **Do not run the second one afterwards.** `uv sync` makes the environment
+> match exactly what you asked for, so a later `uv sync --group dev` *removes*
+> `pyrtlsdr` again and radiotui silently drops back to the simulator. If
+> `import rtlsdr` suddenly fails, this is almost always why.
 
 You also need the RTL-SDR userspace tools or at least `librtlsdr` on your
 system for real hardware (`sudo apt install rtl-sdr`), plus `ffmpeg` for audio
 playback (optional; falls back to `aplay`).
+
+Check what radiotui can actually see at any point:
+
+```bash
+radiotui devices        # reports each layer: pyrtlsdr -> librtlsdr -> dongle
+```
+
+If no hardware is usable, radiotui still starts, but the TUI shows a red
+**NO SDR HARDWARE FOUND** dialog that you have to dismiss deliberately: the
+simulator's signals are synthetic, and anything you test against them tells
+you nothing about real reception.
 
 ### Linux hardware setup (validated on Ubuntu 24.04)
 
@@ -101,6 +119,67 @@ echo 'export LD_LIBRARY_PATH="$HOME/.local/lib/rtlsdr-shim${LD_LIBRARY_PATH:+:$L
 ```
 
 Then verify with `radiotui devices`.
+
+### No device detected
+
+`radiotui devices` reports the layers in order; fix the first one that fails.
+
+| Symptom | Layer | Fix |
+| --- | --- | --- |
+| `ModuleNotFoundError: No module named 'rtlsdr'` | pyrtlsdr not installed | `uv sync --group dev --extra sdr` — and see the warning in [Install](#install) about re-running plain `uv sync` |
+| `AttributeError: ... undefined symbol: rtlsdr_set_dithering` | librtlsdr too old | the shim above |
+| `lsusb` shows nothing | the OS cannot see the dongle | different cable/port, avoid hubs; under WSL see below |
+| `lsusb` shows it, `rtl_test` says "No supported devices found" | driver or permissions | blacklist `dvb_usb_rtl28xxu`, then try `sudo rtl_test -t` — if root works, it is udev rules |
+
+#### WSL: the dongle must be attached to the VM
+
+WSL does **not** share USB devices with Windows by default. A dongle plugged
+into the host is invisible inside WSL: `lsusb` prints nothing and `rtl_test`
+reports "No supported devices found", exactly as if nothing were connected.
+Attach it explicitly with [usbipd-win](https://github.com/dorssel/usbipd-win):
+
+```powershell
+# On Windows. Install once:
+winget install usbipd
+
+# PowerShell as Administrator:
+usbipd list                        # find the RTL-SDR, note its BUSID (e.g. 1-4)
+usbipd bind --busid 1-4            # share it (one-time per device)
+
+# Any PowerShell (keep a WSL shell open so the VM stays alive):
+usbipd attach --wsl --busid 1-4
+```
+
+The dongle is a Realtek RTL2832/2838, so look for VID:PID **`0bda:2838`** in
+`usbipd list` — the name column often reads only "Bulk-In, Interface". Do not
+pick a "Realtek USB Audio" entry; that is a sound card.
+
+**`bind` and `attach` are different steps, and only the second one moves the
+device.** `bind` marks it shareable and is permanent; the state then reads
+`Shared`, which is *not* enough — `lsusb` inside WSL still shows nothing. You
+need `attach` as well, after which the state reads `Attached`. `usbipd bind`
+answering "was already shared" means that step is done, not that you are
+finished.
+
+Then, inside WSL:
+
+```bash
+lsusb | grep -i realtek   # should now list the dongle
+radiotui devices
+```
+
+Notes:
+
+- **Attachment does not survive** a reboot, a replug, or a device reset — you
+  must `usbipd attach` again each time.
+- Requires a WSL kernel of 5.10.60.1 or newer (`uname -r` to check).
+- `usbipd detach --busid 1-4` returns the device to Windows.
+
+Microsoft documents the same flow in
+[Connect USB devices](https://learn.microsoft.com/en-us/windows/wsl/connect-usb).
+
+USB passthrough adds latency and can drop samples under load. If you hit audio
+gaps *only* under WSL, try native Linux before assuming it is a radiotui bug.
 
 ### Measured performance (RTL-SDR v3, R820T, indoor dipole)
 
@@ -217,8 +296,11 @@ output and in CSV/JSON exports.
 
 ### TUI keys
 
-The TUI opens in the radio view: spectrum carousel over the waterfall with the
-frequency ruler beneath it.
+The TUI opens in the radio view: the spectrum carousel with the frequency ruler
+beneath it, and the dial plus signal meter below that. The status line shows
+`sweep #N hop 12/27` while a sweep is running and `paused` when it is not — a
+full pass takes seconds (27 hops on FM broadcast), so the display only redraws
+once per completed sweep.
 `←/→` walk the tuning cursor across the band, `↑/↓` coarse-step 100 kHz,
 `enter` plays what the cursor points at.
 
@@ -229,7 +311,7 @@ frequency ruler beneath it.
 | `enter` | radio view: listen under the cursor · panels: listen to selected row |
 | `l` | stop listening / replaying |
 | `s` | start / stop sweeping (refused while listening) |
-| `t` | show/hide analyst panels (channel table, log, clips) |
+| `t` | show/hide analyst panels (channel table, log, recordings) |
 | `m` | settings menu (threshold, dwell, min SNR, squelch, volume) |
 | `M` | mute / unmute |
 | `r` | record selected channel |
@@ -242,7 +324,7 @@ frequency ruler beneath it.
 | `b` | name (bookmark) the selected channel |
 | `x` | add the selected channel to the ignore list |
 | `Shift-X` | remove the ignore window at the selected frequency |
-| `c` | toggle the session clips pane (`enter` replays a clip) |
+| `c` | show the session recordings (`enter` replays a clip) |
 | `e` | export discovered channels to CSV |
 | `f` | tune an arbitrary frequency or sweep a custom range |
 | `a` | antenna advisor for selected channel |

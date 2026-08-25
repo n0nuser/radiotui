@@ -41,6 +41,11 @@ class Sweeper:
         self.hold_request: HoldRequest | None = None
         self.holding = False
         self.sweeps_done = 0
+        #: Live hop counter so the UI can show progress. A full sweep of FM
+        #: broadcast is 27 hops and takes seconds; without this the display
+        #: sits motionless and looks hung between frames.
+        self.hops_done = 0
+        self.hop_total = len(plan.hop_centers_hz)
 
     @property
     def channels(self):
@@ -103,9 +108,11 @@ class Sweeper:
                 self._plan.fft_size * 4,
             )
             hops = []
+            self.hops_done = 0
             for center in self._plan.hop_centers_hz:
                 if self._stop.is_set():
                     return
+                self.hops_done += 1
                 try:
                     self._device.set_center_freq_hz(center)
                     iq = self._device.read_samples(samples_per_hop)
