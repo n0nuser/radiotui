@@ -45,7 +45,7 @@ from radiotui.export import export_channels
 from radiotui.scanner.monitor import ChannelMonitor, auto_hold_release_reason
 from radiotui.scanner.sweeper import Sweeper
 from radiotui.sdr.base import SdrDevice
-from radiotui.sdr.manager import OpenedDevice, describe_devices, open_device
+from radiotui.sdr.manager import OpenedDevice, hardware_diagnosis, open_device
 from radiotui.tui.app import run_tui
 from radiotui.tuning import decay_peak_db, guess_demod, parse_freq
 
@@ -72,9 +72,8 @@ def open_device_or_exit(force_sim: bool) -> SdrDevice:
         console.print(f"[green]Using real device:[/] {opened.device.name}")
     else:
         console.print(
-            "[yellow]No RTL-SDR hardware found - using SIMULATED device.[/yellow]\n"
-            "[dim]Install pyrtlsdr + librtlsdr for real reception "
-            "(uv sync --extra sdr).[/dim]"
+            "[black on yellow] NO HARDWARE - SIMULATED SIGNALS, NOT REAL RADIO [/]\n"
+            "[dim]Run `radiotui devices` to see which layer is missing.[/dim]"
         )
     return opened.device
 
@@ -253,13 +252,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_devices(_args) -> None:
-    found = describe_devices()
-    if not found:
-        console.print("[yellow]No RTL-SDR devices detected.[/yellow]")
-        console.print("Check: lsusb, driver blocking (dvb_usb_rtl28xxu), librtlsdr install.")
+    """Report each layer between the USB port and radiotui, not just the verdict.
+
+    "Not detected" has several very different causes — pyrtlsdr absent,
+    librtlsdr unloadable, no dongle attached — and they need different fixes.
+    """
+    steps = hardware_diagnosis()
+    for step in steps:
+        mark = "[green]✓[/green]" if step.ok else "[red]✗[/red]"
+        console.print(f"{mark} [bold]{step.label}[/bold]: {step.detail}")
+        if step.fix:
+            console.print(f"   [cyan]fix:[/cyan] {step.fix}")
+    if all(step.ok for step in steps):
         return
-    for entry in found:
-        console.print(f"[green]•[/green] {entry}")
+    console.print(
+        "\n[yellow]No usable hardware; radiotui will fall back to the SIMULATOR,"
+        " whose signals are synthetic.[/yellow]"
+    )
+    console.print(
+        "[dim]Running under WSL? USB devices are not shared with WSL by default -"
+        " see 'No device detected' in the README.[/dim]"
+    )
 
 
 def apply_scan_tuning(settings: Settings, args) -> None:

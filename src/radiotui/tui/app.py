@@ -54,7 +54,12 @@ from radiotui.dsp.spectrum import SweepPlan
 from radiotui.export import export_channels, export_path_for
 from radiotui.scanner.monitor import ChannelMonitor, auto_hold_release_reason
 from radiotui.scanner.sweeper import Sweeper
-from radiotui.sdr.manager import open_device
+from radiotui.sdr.manager import (
+    SIMULATOR_FM_CARRIERS_MHZ,
+    DiagnosisStep,
+    hardware_diagnosis,
+    open_device,
+)
 from radiotui.tui.widgets.spectrum import SpectrumBar
 from radiotui.tuning import decay_peak_db, guess_demod, parse_tune_request
 
@@ -143,6 +148,57 @@ class TuneModal(ModalScreen):
             self.query_one("#tune-error", Static).update(f"[red]{exc}[/red]")
             return
         self.dismiss((start_hz, end_hz, demod))
+
+
+def no_device_text(steps: list[DiagnosisStep]) -> Text:
+    """Explain that nothing on screen is real radio, and how to fix it."""
+    text = Text()
+    text.append("  NO SDR HARDWARE FOUND  \n\n", style="bold white on red")
+    text.append("radiotui could not open an RTL-SDR device.\n")
+    text.append("Nothing you see or hear will be real radio.\n\n", style="bold yellow")
+    carriers = ", ".join(f"{mhz:.1f}" for mhz in SIMULATOR_FM_CARRIERS_MHZ)
+    text.append(
+        f"The simulator transmits four synthetic FM carriers at {carriers} MHz.\n"
+        "They are tones, not stations, and they are identical every run.\n\n",
+        style="dim",
+    )
+    for step in steps:
+        text.append("  ✗ " if not step.ok else "  ✓ ", style="red" if not step.ok else "green")
+        text.append(f"{step.label}: ", style="bold")
+        text.append(f"{step.detail}\n")
+        if step.fix:
+            text.append(f"      fix: {step.fix}\n", style="cyan")
+    text.append("\nFull diagnostic: ", style="dim")
+    text.append("radiotui devices\n", style="cyan")
+    text.append("\n  s ", style="bold cyan")
+    text.append("continue in the simulator anyway")
+    text.append("      q ", style="bold cyan")
+    text.append("quit")
+    return text
+
+
+class NoDeviceModal(ModalScreen):
+    """Hard stop when no SDR was found and the simulator was not asked for.
+
+    This used to be a log line, but the log pane is hidden in the radio view,
+    so the only cue that nothing was real was a three-character SIM badge in
+    the status bar. That is far too easy to miss: you can spend an evening
+    testing against synthetic carriers without ever realising.
+    """
+
+    def __init__(self, steps: list[DiagnosisStep], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._steps = steps
+
+    def compose(self) -> ComposeResult:
+        yield Static(no_device_text(self._steps), id="no-device")
+
+    def on_key(self, event) -> None:
+        # Deliberately not `escape` or any stray key: continuing with fake
+        # signals has to be a decision, not an accident.
+        if event.key == "s":
+            event.stop()
+            self.dismiss()
 
 
 class AntennaModal(ModalScreen):
@@ -275,6 +331,8 @@ class RadioTuiApp(App):
     #log { height: 1fr; border: round #3b4d8f; }
     #clips { height: 1fr; border: round #3b4d8f; display: none; }
     #clips.shown { display: block; }
+    NoDeviceModal { align: center middle; background: #000000ee; }
+    #no-device { width: 78; border: thick red; padding: 1 2; background: $surface; }
     AntennaModal { align: center middle; background: #000000cc; }
     #antenna-report { width: 64; border: thick cyan; padding: 1 2; background: $surface; }
     HelpModal { align: center middle; background: #000000cc; }
@@ -459,6 +517,10 @@ class RadioTuiApp(App):
                     if ok
                     else "Bias tee: [red]not supported by this librtlsdr build[/red]"
                 )
+        if not self.is_real and not self._force_sim:
+            # Falling back to fake signals is not something to mention in a
+            # hidden log pane; it invalidates everything the user is about to do.
+            self.push_screen(NoDeviceModal(hardware_diagnosis()))
         mode = "REAL" if self.is_real else "SIMULATED"
         self.log_line(
             f"Device: [bold]{self.device.name}[/bold] ({mode})."
@@ -671,7 +733,7 @@ class RadioTuiApp(App):
         if self.bias_tee_on:
             parts.append("[yellow]bias ⚡[/yellow]")
         if not self.is_real:
-            parts.append("[yellow]SIM[/yellow]")
+            parts.append("[black on yellow] SIMULATED - NOT REAL RADIO [/]")
         if self.settings.scanner.autonomous:
             hold = (
                 f" [magenta]HOLD {self.auto_hold_freq / 1e6:.3f}[/magenta]"
@@ -1244,7 +1306,9 @@ class RadioTuiApp(App):
     def action_quit(self) -> None:
         # App-level q has priority over screen bindings, so a modal can never
         # intercept it: close the topmost overlay instead of killing the app.
-        if len(self.screen_stack) > 1:
+        if isinstance(self.screen, NoDeviceModal):
+            self.exit()  # a stop sign, not an overlay: q means quit here
+        elif len(self.screen_stack) > 1:
             self.pop_screen()
         else:
             self.exit()
