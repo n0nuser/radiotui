@@ -65,6 +65,7 @@ class ChannelMonitor:
         self._thread: threading.Thread | None = None
         self._reader: threading.Thread | None = None
         self._blocks: queue.Queue = queue.Queue(maxsize=2)
+        self._read_error: Exception | None = None
         self.player = AudioPlayer(settings.audio.output_rate_hz)
         scanner = settings.scanner
         self.recorder = VoxRecorder(
@@ -119,6 +120,7 @@ class ChannelMonitor:
         # Two blocks of slack: enough to ride out a slow demodulation without
         # letting stale radio pile up behind the speaker.
         self._blocks = queue.Queue(maxsize=2)
+        self._read_error = None
         self._reader = threading.Thread(
             target=self._read_loop, name=f"reader-{self._freq_hz / 1e6:.3f}", daemon=True
         )
@@ -165,8 +167,11 @@ class ChannelMonitor:
             try:
                 iq = self._device.read_samples(block)
             except (OSError, RuntimeError, ValueError) as exc:
-                # Never block on a full queue here: if the consumer has already
-                # gone, an unbounded put would keep this thread alive past stop().
+                # Record before handing over: if the queue is full because the
+                # consumer is briefly wedged, the put times out and the only
+                # evidence of the failure would otherwise be discarded, leaving
+                # a live-looking monitor that is silent forever.
+                self._read_error = exc
                 try:
                     self._blocks.put(exc, timeout=1.0)
                 except queue.Full:
@@ -186,6 +191,12 @@ class ChannelMonitor:
             try:
                 iq = self._blocks.get(timeout=1.0)
             except queue.Empty:
+                if self._reader is not None and not self._reader.is_alive():
+                    # The reader died without managing to hand its error over.
+                    # Staying in this loop would look like listening forever.
+                    if self.on_error:
+                        self.on_error(f"read failed: {self._read_error or 'reader stopped'}")
+                    break
                 continue
             if isinstance(iq, Exception):
                 if self.on_error:

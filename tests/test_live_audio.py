@@ -5,6 +5,7 @@ for about a second every few seconds, and FM being much noisier than a
 hardware receiver on the same station.
 """
 
+import queue
 import time
 
 import numpy as np
@@ -172,3 +173,47 @@ def test_wfm_audio_is_band_limited_before_resampling():
     wanted = spectrum[(freqs > 900) & (freqs < 1_100)].max()
     above_audio = spectrum[freqs > 16_000].max()
     assert 20 * np.log10(wanted / (above_audio + 1e-12)) > 40
+
+
+def test_dead_reader_is_reported_even_when_its_error_is_dropped():
+    """The reader can die without managing to hand its exception over.
+
+    ``_read_loop`` puts the exception with a timeout so it can never outlive
+    ``stop()``. If the consumer happens to be wedged, that put times out and the
+    only evidence of the failure is discarded — leaving a monitor that reports
+    ``running`` forever while producing silence. That is the same silent-failure
+    shape as the hidden log pane, so the consumer has to notice for itself.
+    """
+
+    class FailingDevice(SimulatedDevice):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self._reads = 0
+
+        def read_samples(self, count: int) -> np.ndarray:
+            self._reads += 1
+            if self._reads > 2:
+                raise OSError("device disconnected")
+            return super().read_samples(count)
+
+    errors: list[str] = []
+    monitor = ChannelMonitor(FailingDevice(seed=1), 100e6, DemodMode.WFM, Settings(), muted=True)
+    monitor.on_error = errors.append
+    monitor.start()
+
+    real_put = monitor._blocks.put
+
+    def dropping_put(item, *args, **kwargs):
+        if isinstance(item, Exception):
+            raise queue.Full  # the handover the consumer would normally see
+        return real_put(item, *args, **kwargs)
+
+    monitor._blocks.put = dropping_put
+    deadline = time.perf_counter() + 5.0
+    while monitor.running and time.perf_counter() < deadline:
+        time.sleep(0.05)
+    monitor.stop()
+
+    assert not monitor.running, "the consumer kept looping against a dead reader"
+    assert errors, "the failure was swallowed entirely"
+    assert "disconnected" in errors[0], f"lost the real cause: {errors[0]}"
