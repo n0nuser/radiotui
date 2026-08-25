@@ -150,6 +150,17 @@ usbipd bind --busid 1-4            # share it (one-time per device)
 usbipd attach --wsl --busid 1-4
 ```
 
+The dongle is a Realtek RTL2832/2838, so look for VID:PID **`0bda:2838`** in
+`usbipd list` — the name column often reads only "Bulk-In, Interface". Do not
+pick a "Realtek USB Audio" entry; that is a sound card.
+
+**`bind` and `attach` are different steps, and only the second one moves the
+device.** `bind` marks it shareable and is permanent; the state then reads
+`Shared`, which is *not* enough — `lsusb` inside WSL still shows nothing. You
+need `attach` as well, after which the state reads `Attached`. `usbipd bind`
+answering "was already shared" means that step is done, not that you are
+finished.
+
 Then, inside WSL:
 
 ```bash
