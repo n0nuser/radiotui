@@ -1423,6 +1423,14 @@ class RadioTuiApp(App):
     @on(MonitorError)
     def on_monitor_error(self, message: RadioTuiApp.MonitorError) -> None:
         self.log_line(f"[red]{message.text}[/red]")
+        # A dead reader thread means playback has silently stopped; the log
+        # line alone is easy to miss because the log pane is often hidden.
+        # Surface it as a toast and drop the dead monitor so the status bar
+        # stops claiming we're still listening.
+        if self.monitor is not None and not self.monitor.running:
+            self.notify(message.text, title="Monitor stopped", severity="error", timeout=10)
+            self.stop_monitor(resume_sweep=self.resume_sweep_after_listen)
+            self.refresh_status()
 
     def on_unmount(self) -> None:
         self._shutting_down = True
