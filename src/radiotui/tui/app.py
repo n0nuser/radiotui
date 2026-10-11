@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import time
 import wave
@@ -64,6 +65,10 @@ from radiotui.tui.widgets.spectrum import SpectrumBar
 from radiotui.tuning import decay_peak_db, guess_demod, parse_tune_request
 
 GAIN_MIN, GAIN_MAX, GAIN_STEP = 0.0, 49.6, 4.8
+
+#: Quit-time wait for the monitor teardown: Monitor.stop joins its reader
+#: for up to 5 s, plus the device close.
+TEARDOWN_WAIT_S = 7.0
 
 KEY_DISPLAYS = {"plus": "+", "minus": "-", "question_mark": "?", "enter": "enter"}
 
@@ -1524,6 +1529,7 @@ def run_tui(
         start_sweeper=True,
     )
     app.run()
-    # Monitor.stop joins its reader for up to 5 s; allow that plus the close.
-    app.wait_for_teardown(timeout_s=7.0)
+    if not app.wait_for_teardown(timeout_s=TEARDOWN_WAIT_S):
+        # The daemon thread dies with the process; the OS reclaims the dongle.
+        print("radiotui: tuner teardown did not finish; device left to the OS", file=sys.stderr)
     return 0
