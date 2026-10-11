@@ -22,8 +22,10 @@ Read from `src/radiotui/audio/demod.py` and `core/models.py`:
   +-1.5 (`demod_nfm`). WFM adds a 50/75 us single-pole de-emphasis as a
   truncated FIR (ADR-0002, ADR-0009).
 - AM: envelope, ~4 ms moving-average DC removal, slow block AGC.
-- Channel filter: bandwidth-derived stride plus a triangular kernel
-  (ADR-0003). Scanner-grade, ~28 dB on the first neighbour.
+- Channel filter: Hamming-windowed sinc evaluated polyphase (ADR-0013,
+  which superseded ADR-0003's triangular kernel): about -66 dB at 200 kHz
+  for WFM. WFM also low-passes to 15 kHz before resampling to 48 kHz, so
+  the pilot and stereo subcarriers no longer fold into the audio.
 - Squelch: RF level gate (ADR-0008) and an audio "is this speech" VOX gate
   (`classify.py`, ADR-0010). No noise squelch, no tone squelch.
 - No sub-audible high-pass in NFM: the discriminator output keeps 67-254 Hz
