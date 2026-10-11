@@ -345,3 +345,18 @@ async def test_shift_x_unignores_selected_channel():
         assert warning is None
         assert saved.ignores == []
         assert "unignored" in log_text(app)
+
+
+def test_failed_save_keeps_the_previous_file(tmp_path, monkeypatch):
+    """A crash or full disk mid-save must not truncate the user's bookmarks."""
+    path = book_path(tmp_path)
+    path.write_text(VALID_TOML, encoding="utf-8")
+
+    def failing_replace(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("os.replace", failing_replace)
+    with pytest.raises(OSError):
+        save_user_channels(UserChannels(), path)
+    assert path.read_text(encoding="utf-8") == VALID_TOML
+    assert [p.name for p in tmp_path.iterdir()] == ["channels.toml"]

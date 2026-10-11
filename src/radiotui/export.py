@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from radiotui.core.files import write_text_atomic
 from radiotui.core.models import Channel
 
 _CSV_FIELDS = (
@@ -40,21 +42,23 @@ def export_channels(
     """Write ``channels`` to ``path`` (.json -> JSON, anything else -> CSV)."""
     path = Path(path)
     ordered = sorted(channels, key=lambda ch: ch.center_hz)
-    path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() == ".json":
         payload = {
             "exported_at": iso_ts(datetime.now().timestamp()),
             "context": context or {},
             "channels": [_channel_dict(ch) for ch in ordered],
         }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        text = json.dumps(payload, indent=2)
     else:
-        with path.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(fh, fieldnames=_CSV_FIELDS)
-            writer.writeheader()
-            for ch in ordered:
-                row = _channel_dict(ch)
-                writer.writerow({k: row[k] for k in _CSV_FIELDS})
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=_CSV_FIELDS)
+        writer.writeheader()
+        for ch in ordered:
+            row = _channel_dict(ch)
+            writer.writerow({k: row[k] for k in _CSV_FIELDS})
+        text = buffer.getvalue()
+    # Headless scans re-export to the same path every 30 s.
+    write_text_atomic(path, text)
     return path
 
 
