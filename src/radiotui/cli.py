@@ -354,6 +354,9 @@ def _export_sweep(channels, path_str: str, band: Band, settings, sweeper) -> Pat
         "start_hz": band.start_hz,
         "end_hz": band.end_hz,
         "gain_db": settings.scanner.gain_db,
+        "freq_correction_ppm": settings.scanner.freq_correction_ppm,
+        "bias_tee": settings.scanner.bias_tee,
+        "offset_tune": settings.scanner.offset_tune,
         "sample_rate_hz": effective_sample_rate(settings.scanner),
         "sweeps_completed": sweeper.sweeps_done,
     }
@@ -609,7 +612,7 @@ def main(argv: list[str] | None = None) -> int:
         args._settings = runtime_settings(args, data)
     except ConfigError as exc:
         # escape: "[scanner]" in a message is not Rich markup
-        console.print(f"[red]Config error:[/] {escape(str(exc))}")
+        console.print(f"[red]Config error:[/] {escape(str(exc))}", soft_wrap=True)
         return 2
     if not args.command or args.command == "tui":
         return run_tui(
