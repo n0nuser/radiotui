@@ -562,7 +562,10 @@ def render_meter(rssi: float, peak: float, freq: float) -> Panel:
 def cmd_config(args) -> int:
     path = config_path()
     exists = path.exists()
-    console.print(f"Config file: [bold]{path}[/bold] ({'present' if exists else 'not created'})")
+    console.print(
+        f"Config file: [bold]{path}[/bold] ({'present' if exists else 'not created'})",
+        soft_wrap=True,
+    )
     if args.path or not exists:
         return 0
     data = load_config(path)

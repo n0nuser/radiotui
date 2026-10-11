@@ -6,6 +6,8 @@ the ``@on`` decorator; these tests pin that behavior.
 """
 
 import asyncio
+import threading
+import time
 
 from textual.widgets import Static
 
@@ -76,3 +78,21 @@ async def test_autonomous_toggle_flips_setting_and_status() -> None:
         await pilot.press("o")
         await pilot.pause(0.2)
         assert not app.settings.scanner.autonomous
+
+
+async def test_quit_while_listening_stops_monitor_and_closes_device() -> None:
+    """Workers no longer run once the app unmounts; teardown must still happen."""
+    app = RadioTuiApp(force_sim=True)
+    before = set(threading.enumerate())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        app.start_monitor(100_000_000, DemodMode.WFM, muted=True, enable_recorder=False)
+        await pilot.pause(0.3)
+    deadline = time.time() + 6.0
+    while time.time() < deadline:
+        leaked = [t for t in set(threading.enumerate()) - before if t.name.startswith("monitor-")]
+        if not leaked and app.device is None:
+            break
+        time.sleep(0.05)
+    assert not leaked
+    assert app.device is None
