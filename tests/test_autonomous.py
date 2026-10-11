@@ -186,7 +186,7 @@ def test_auto_hold_release_reason_paths(silent_for, held_for, expected):
 
 
 def tuner_consumers(app, ignore: set[threading.Thread]) -> int:
-    """Threads reading the tuner: live monitors, plus the sweeper unless parked.
+    """Threads reading the tuner: monitor readers, plus the sweeper unless parked.
 
     ``ignore`` holds threads leaked by earlier tests in the same process.
     """
@@ -195,7 +195,7 @@ def tuner_consumers(app, ignore: set[threading.Thread]) -> int:
     for thread in threading.enumerate():
         if thread in ignore:
             continue
-        if thread.name.startswith("monitor-"):
+        if thread.name.startswith("reader-"):  # the monitor's device-reading thread
             count += 1
         elif thread.name == "sweeper" and not (sweeper is not None and sweeper.holding_active()):
             count += 1

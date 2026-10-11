@@ -25,6 +25,7 @@ use.
 | --- | --- | --- |
 | Textual event loop | `RadioTuiApp` | n/a |
 | `sweeper` | `scanner.sweeper.Sweeper` | bounded `queue.Queue[ScanState]` (maxsize 4, drops when full, except that a hold-carrying state blocks until queued), drained by `RadioTuiApp.poll_queue` every 0.15 s; only the latest state is used |
+| `reader-<MHz>` | `scanner.monitor.ChannelMonitor` | none: the only thread that calls `read_samples` while listening; feeds a two-block queue to the demod thread ([ADR 0012](adr/0012-decoupled-reader-thread.md)) |
 | `monitor-<MHz>` | `scanner.monitor.ChannelMonitor` | `on_rssi` / `on_error` callbacks that the app wires to `post_message` (`RssiUpdate`, `MonitorError`); recorder clips arrive as `ClipSaved` |
 | teardown worker | `RadioTuiApp._stop_monitor_worker` (`run_worker(thread=True)`) | `call_from_thread(_monitor_stop_finished, callback)` |
 | player subprocess | `audio.player.AudioPlayer` | none (`ffplay` or `aplay` fed PCM over stdin) |
@@ -32,15 +33,17 @@ use.
 Device errors in the sweeper arrive as a `ScanState` with `error` set.
 `poll_queue` logs the error and stops the sweeper.
 
-## Receive chain (monitor thread)
+## Receive chain (reader and monitor threads)
 
-`ChannelMonitor._run` repeats a fixed loop: `read_samples(block)`, then
-`rssi_dbfs`, then `channel_audio` (filter, decimate, demod, de-emphasis, with
-`DemodState` carried across blocks), then `audio_to_pcm16`. The PCM goes to
-the player, scaled by volume (playback only), and to `VoxRecorder.feed`, which
-applies the classifier VOX gate and the RF squelch gate. The loop sleeps out
-the rest of each block's real-time budget. See ADRs 0002, 0003, 0006, 0008
-and 0010.
+`ChannelMonitor._read_loop` (the `reader-<MHz>` thread) only calls
+`read_samples(block)` and hands each block to a two-block queue, so the
+device is always drained ([ADR 0012](adr/0012-decoupled-reader-thread.md)).
+`ChannelMonitor._run` (the `monitor-<MHz>` thread) takes blocks from that
+queue: `rssi_dbfs`, then `channel_audio` (windowed-sinc channel filter and
+decimation, demod, de-emphasis, with `DemodState` carried across blocks),
+then `audio_to_pcm16`. The PCM goes to the player, scaled by volume
+(playback only), and to `VoxRecorder.feed`, which applies the classifier VOX
+gate and the RF squelch gate. See ADRs 0002, 0003, 0006, 0008, 0010 and 0013.
 
 ## Tuner handoff
 
