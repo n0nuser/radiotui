@@ -66,9 +66,9 @@ from radiotui.tuning import decay_peak_db, guess_demod, parse_tune_request
 
 GAIN_MIN, GAIN_MAX, GAIN_STEP = 0.0, 49.6, 4.8
 
-#: Quit-time wait for the monitor teardown: Monitor.stop joins its reader
-#: for up to 5 s, plus the device close.
-TEARDOWN_WAIT_S = 7.0
+#: Quit-time wait for the monitor teardown: ChannelMonitor.stop joins its
+#: reader and demod threads for up to 5 s each, plus the device close.
+TEARDOWN_WAIT_S = 11.0
 
 KEY_DISPLAYS = {"plus": "+", "minus": "-", "question_mark": "?", "enter": "enter"}
 
