@@ -2,7 +2,7 @@
 
 Each kept clip gets a ``.json`` sidecar next to the WAV carrying the context
 that produced it (frequency, demod, band, hardware settings, RSSI) so an
-overnight run stays traceable (#20). Clips shorter than
+overnight run stays traceable (ADR 0006). Clips shorter than
 ``AudioSettings.min_clip_seconds`` are discarded instead of written.
 """
 

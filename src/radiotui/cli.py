@@ -277,7 +277,7 @@ def cmd_devices(_args) -> None:
 
 
 def apply_scan_tuning(settings: Settings, args) -> None:
-    """Headless squelch controls (#17): flags override config-file values."""
+    """Headless squelch controls: flags override config-file values."""
     scanner = settings.scanner
     if args.threshold_margin is not None:
         lo, hi = THRESHOLD_MARGIN_RANGE

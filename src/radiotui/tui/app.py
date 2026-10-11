@@ -228,7 +228,7 @@ class SettingRow:
 
 
 class SettingsModal(ModalScreen):
-    """Navigable list of the knobs a radio user actually touches (#23)."""
+    """Navigable list of the knobs a radio user actually touches."""
 
     BINDINGS = [
         Binding("escape,q", "dismiss", "Close"),
