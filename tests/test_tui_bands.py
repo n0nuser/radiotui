@@ -19,9 +19,7 @@ def test_numeric_keys_map_one_to_one_to_bands():
 
 
 async def test_user_band_does_not_renumber_builtins():
-    BANDS["user_test"] = Band(
-        "user_test", "User test", 100e6, 101e6, BANDS["vhf_ham"].demod
-    )
+    BANDS["user_test"] = Band("user_test", "User test", 100e6, 101e6, BANDS["vhf_ham"].demod)
     try:
         app = RadioTuiApp(force_sim=True)
         async with app.run_test(size=(120, 40)) as pilot:
