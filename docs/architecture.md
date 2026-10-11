@@ -65,10 +65,11 @@ USB read:
 
 On shutdown, `_close_device` waits until `_monitor_stops_pending` reaches 0.
 Textual starts no workers while the app unmounts, so `on_unmount` stops a
-live monitor in a plain non-daemon `tuner-teardown` thread instead. That
-thread closes the device when it is the last pending stop, and the process
-cannot exit before it does. `_stops_lock` guards the counter both threads
-touch.
+live monitor in a plain `tuner-teardown` thread instead. That thread closes
+the device when it is the last pending stop. `run_tui` waits for it with
+`wait_for_teardown`, bounded at 7 s, so a wedged USB read or audio pipe
+cannot hang the process on quit. `_stops_lock` guards the counter both
+threads touch.
 Starting a listen pauses the sweeper with `_pause_sweeper_for_monitor` and
 sets `resume_sweep_after_listen`. Pressing `s` while a monitor is active is
 refused. See [ADR 0011](adr/0011-asynchronous-monitor-handoff.md).
