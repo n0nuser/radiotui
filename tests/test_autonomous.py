@@ -289,9 +289,14 @@ async def test_tui_autonomous_hold_cycles_end_to_end() -> None:
             assert log.count("releasing") >= 2, log
             # Released holds give the tuner back: the sweeper keeps sweeping.
             assert app.monitor is None or app.auto_hold_freq is not None
+            # A full FM sweep plus the monitor teardown can take seconds on a
+            # slow CI runner, so poll against a deadline instead of a fixed pause.
             sweeps = app.sweeper.sweeps_done
-            await pilot.pause(1.0)
-            assert app.sweeper.sweeps_done > sweeps or app.auto_hold_freq is not None
+            assert await wait_until(
+                pilot,
+                lambda: app.sweeper.sweeps_done > sweeps or app.auto_hold_freq is not None,
+                timeout_s=15.0,
+            )
             app.sweeper.stop()
     finally:
         peak = sampler.stop()
