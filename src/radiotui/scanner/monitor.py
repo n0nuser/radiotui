@@ -21,18 +21,20 @@ from radiotui.sdr.base import SdrDevice
 NEVER_VOICED = float("inf")
 
 
-def auto_hold_release_reason(seconds_since_voice: float, hold_release_s: float) -> str:
-    """Label matching whichever autonomous-hold release condition fired.
+def auto_hold_release_reason(
+    seconds_since_voice: float, held_for: float, hold_release_s: float, max_hold_s: float
+) -> str | None:
+    """Why an autonomous hold should end now, or None to keep holding.
 
-    ``seconds_since_voice == inf`` means no voice was ever detected on the
-    channel, which is worth diagnosing differently from a transmission that
-    simply ended.
+    Silence counts from the later of the hold start and the last voice, so a
+    channel that has not voiced yet gets ``hold_release_s`` of grace before it
+    is released as "no traffic" (``seconds_since_voice == inf``).
     """
-    if seconds_since_voice == NEVER_VOICED:
-        return "no traffic"
-    if seconds_since_voice >= hold_release_s:
-        return "silence"
-    return "max hold"
+    if min(seconds_since_voice, held_for) >= hold_release_s:
+        return "no traffic" if seconds_since_voice == NEVER_VOICED else "silence"
+    if held_for >= max_hold_s:
+        return "max hold"
+    return None
 
 
 class ChannelMonitor:
