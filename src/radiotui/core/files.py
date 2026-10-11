@@ -3,22 +3,31 @@
 from __future__ import annotations
 
 import os
-import tempfile
+import shutil
 from pathlib import Path
 
 
 def write_text_atomic(path: Path, text: str) -> None:
-    """Replace ``path`` with ``text`` so a crash leaves either the old or new file.
+    """Replace ``path`` so a killed process or full disk leaves the old or new file.
 
-    The temporary file lives in the same directory so ``os.replace`` stays a
-    same-filesystem rename, which is atomic on POSIX and Windows.
+    The temporary file lives next to the target so ``os.replace`` stays a
+    same-filesystem rename, atomic on POSIX and Windows. ``fsync`` before the
+    rename also covers a power loss. The temporary file is created normally
+    (umask applies) and inherits an existing target's mode, so permissions
+    survive the replace.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = path.with_name(f".{path.name}.tmp")
+    replaced = False
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+        with tmp.open("w", encoding="utf-8", newline="") as fh:
             fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if path.exists():
+            shutil.copymode(path, tmp)
         os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+        replaced = True
+    finally:
+        if not replaced:
+            tmp.unlink(missing_ok=True)

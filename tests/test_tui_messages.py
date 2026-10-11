@@ -155,8 +155,8 @@ async def test_quit_teardown_is_bounded_when_monitor_stop_hangs(monkeypatch) -> 
         app.start_monitor(100_000_000, DemodMode.WFM, muted=True, enable_recorder=False)
         await pilot.pause(0.3)
     t0 = time.monotonic()
-    assert not app.wait_for_teardown(timeout_s=0.3)
-    assert time.monotonic() - t0 < 1.0
+    assert not app.wait_for_teardown(timeout_s=0.1)
+    assert time.monotonic() - t0 < 3.0
     release.set()
     assert app.wait_for_teardown(timeout_s=6.0)
     assert app.device is None

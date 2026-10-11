@@ -2,6 +2,7 @@
 
 import csv
 import json
+import sys
 
 import pytest
 from textual.widgets import DataTable
@@ -360,3 +361,12 @@ def test_failed_save_keeps_the_previous_file(tmp_path, monkeypatch):
         save_user_channels(UserChannels(), path)
     assert path.read_text(encoding="utf-8") == VALID_TOML
     assert [p.name for p in tmp_path.iterdir()] == ["channels.toml"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_save_keeps_the_file_mode(tmp_path):
+    path = book_path(tmp_path)
+    path.write_text(VALID_TOML, encoding="utf-8")
+    path.chmod(0o640)
+    save_user_channels(UserChannels(), path)
+    assert path.stat().st_mode & 0o777 == 0o640
