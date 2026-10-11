@@ -21,6 +21,7 @@ class AudioPlayer:
             for argv in (
                 [
                     "ffplay",
+                    "-autoexit",  # exit on stdin EOF, or a dead parent orphans it
                     "-loglevel",
                     "quiet",
                     "-nostats",
@@ -36,6 +37,7 @@ class AudioPlayer:
                 ],
                 [
                     "ffplay",
+                    "-autoexit",  # exit on stdin EOF, or a dead parent orphans it
                     "-loglevel",
                     "quiet",
                     "-nostats",
@@ -101,6 +103,7 @@ class AudioPlayer:
                 proc.wait(timeout=2.0)
             except (OSError, subprocess.SubprocessError):
                 proc.kill()
+                proc.wait()  # reap it, or it lingers as a zombie
 
     @property
     def running(self) -> bool:

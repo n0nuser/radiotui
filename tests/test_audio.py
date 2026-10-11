@@ -1,3 +1,6 @@
+import shutil
+import time
+
 import numpy as np
 import pytest
 
@@ -9,6 +12,7 @@ from radiotui.audio.demod import (
     frequency_shift,
     rssi_dbfs,
 )
+from radiotui.audio.player import AudioPlayer
 from radiotui.audio.recorder import VoxRecorder, pcm_rms_dbfs
 from radiotui.config import AudioSettings
 from radiotui.core.models import DemodMode
@@ -141,3 +145,18 @@ def test_peak_decay_stays_in_db_and_moves_toward_current_level():
         peak = decay_peak_db(peak, -60.0)
     assert peak == pytest.approx(-21.25)
     assert decay_peak_db(peak, -10.0) == -10.0
+
+
+@pytest.mark.skipif(shutil.which("ffplay") is None, reason="needs ffplay")
+def test_player_stop_lets_ffplay_exit_on_eof():
+    """ffplay must exit on stdin EOF; otherwise every stop waits out a kill timeout
+    and a crashed parent leaves ffplay running forever."""
+    player = AudioPlayer(48_000)
+    assert player.start()
+    assert player.backend == "ffplay"
+    proc = player._proc
+    player.write(b"\x00\x00" * 4800)
+    t0 = time.monotonic()
+    player.stop()
+    assert time.monotonic() - t0 < 1.5
+    assert proc.returncode == 0  # exited by itself, not killed
