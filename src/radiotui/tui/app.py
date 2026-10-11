@@ -323,6 +323,7 @@ class RadioTuiApp(App):
         Binding("question_mark", "help", "Help"),
         Binding("q", "quit", "Quit", priority=True),
     ]
+
     class RssiUpdate(Message):
         def __init__(self, rssi_dbfs: float) -> None:
             super().__init__()
@@ -357,6 +358,7 @@ class RadioTuiApp(App):
         self._start_sweeper = start_sweeper
         self._overflow_band_index = -1
         self._monitor_stops_pending = 0
+        self._stops_lock = threading.Lock()  # the shutdown teardown thread counts too
         self._shutting_down = False
         self.bias_tee_on = False
         self.hf_active = False
@@ -1109,13 +1111,20 @@ class RadioTuiApp(App):
             monitor.stop()
             self.call_from_thread(self._monitor_stop_finished, callback, monitor)
 
-        self._monitor_stops_pending += 1
+        with self._stops_lock:
+            self._monitor_stops_pending += 1
         self.run_worker(finish_stop, thread=True, exit_on_error=False)
 
+    def _monitor_stop_done(self) -> bool:
+        """Count one finished stop; True when none remain."""
+        with self._stops_lock:
+            self._monitor_stops_pending -= 1
+            return self._monitor_stops_pending == 0
+
     def _monitor_stop_finished(self, callback=None, monitor=None) -> None:
-        self._monitor_stops_pending -= 1
+        last = self._monitor_stop_done()
         if self._shutting_down:
-            if self._monitor_stops_pending == 0:
+            if last:
                 self._close_device()
             return
         if callback is not None:
@@ -1359,7 +1368,19 @@ class RadioTuiApp(App):
             self.sweeper.stop()
         monitor = self._detach_monitor()
         if monitor is not None:
-            self._stop_monitor_worker(monitor)
+            # Textual starts no new workers while unmounting, so a worker here
+            # would never run: the monitor would keep reading and the device
+            # would never close. A plain non-daemon thread finishes the stop,
+            # and the device close, before the process exits.
+            with self._stops_lock:
+                self._monitor_stops_pending += 1
+
+            def final_stop() -> None:
+                monitor.stop()
+                if self._monitor_stop_done():
+                    self._close_device()
+
+            threading.Thread(target=final_stop, name="tuner-teardown").start()
         elif self._monitor_stops_pending == 0:
             self._close_device()
 
