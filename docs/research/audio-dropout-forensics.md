@@ -61,3 +61,21 @@ If a dropout ever recurs, redo the elimination ladder in the companion
 reasoning log
 ([2026-08-23-audio-dropout-hunt.md](../reasoning_logs/2026-08-23-audio-dropout-hunt.md)),
 starting from the concurrent-access guard as a now-controlled variable.
+
+## Correction (2026-08-23)
+
+Hypothesis 1 was dismissed too early. The measurements taken to kill it —
+device-paced 64 ms reads, demod p95 12 ms — are themselves the proof of
+starvation: a serial read-then-process loop yields 64 ms of audio per 76 ms of
+wall time, and the device keeps producing during the processing window with
+nobody reading it. That deficit drains the 1.4 s playback buffer and stalls it
+on a regular cadence, which is what the user reported again after the
+concurrent-access guard shipped.
+
+Fixed by splitting reading onto its own thread
+([ADR-0012](../adr/0012-decoupled-reader-thread.md)); a paced fake device now
+measures audio production at 100.00% of real time.
+
+The lesson for the ladder: "the loop is fast enough" is not the same claim as
+"the loop keeps up with real time", and only the second one matters here.
+

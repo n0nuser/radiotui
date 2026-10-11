@@ -1,6 +1,6 @@
 # 0003 — Channel filter via bandwidth-derived decimation and a triangular kernel
 
-- Status: Accepted
+- Status: Superseded by [ADR-0013](0013-windowed-sinc-channel-filter.md)
 - Date: 2026-08-22
 
 ## Context
