@@ -480,10 +480,13 @@ def cmd_listen(args) -> None:
     console.print(
         f"Listening [bold]{args.freq / 1e6:.4f} MHz[/bold] ({mode}). Ctrl+C to stop." + record_note
     )
+    t0 = time.time()
     try:
         monitor.start()
         while monitor.running:
             time.sleep(0.25)
+            if args.seconds and time.time() - t0 > args.seconds:
+                break
     except KeyboardInterrupt:
         pass
     finally:
