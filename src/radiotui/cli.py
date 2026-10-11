@@ -391,16 +391,17 @@ def _headless_auto_hold(
     reason = "monitor stopped"
     while monitor.running:
         time.sleep(0.2)
-        silent_for = monitor.recorder.seconds_since_voice()
         held_for = time.time() - t_hold
-        silent = silent_for >= settings.scanner.hold_release_s
-        expired = held_for >= settings.scanner.max_hold_s
-        out_of_time = budget_s is not None and held_for >= budget_s
-        if silent or expired or out_of_time:
-            if out_of_time and not silent:
-                reason = "out of time"
-            else:
-                reason = auto_hold_release_reason(silent_for, settings.scanner.hold_release_s)
+        release = auto_hold_release_reason(
+            monitor.recorder.seconds_since_voice(),
+            held_for,
+            settings.scanner.hold_release_s,
+            settings.scanner.max_hold_s,
+        )
+        if budget_s is not None and held_for >= budget_s and release in (None, "max hold"):
+            release = "out of time"
+        if release is not None:
+            reason = release
             break
     clips = monitor.recorder.stop()
     monitor.stop()
