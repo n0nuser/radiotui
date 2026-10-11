@@ -277,7 +277,7 @@ def cmd_devices(_args) -> None:
 
 
 def apply_scan_tuning(settings: Settings, args) -> None:
-    """Headless squelch controls (#17): flags override config-file values."""
+    """Headless squelch controls: flags override config-file values."""
     scanner = settings.scanner
     if args.threshold_margin is not None:
         lo, hi = THRESHOLD_MARGIN_RANGE
@@ -480,10 +480,13 @@ def cmd_listen(args) -> None:
     console.print(
         f"Listening [bold]{args.freq / 1e6:.4f} MHz[/bold] ({mode}). Ctrl+C to stop." + record_note
     )
+    t0 = time.time()
     try:
         monitor.start()
         while monitor.running:
             time.sleep(0.25)
+            if args.seconds and time.time() - t0 > args.seconds:
+                break
     except KeyboardInterrupt:
         pass
     finally:

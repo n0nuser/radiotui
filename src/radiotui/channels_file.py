@@ -18,6 +18,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on py3.10
     import tomli as tomllib
 
+from radiotui.core.files import write_text_atomic
 from radiotui.core.models import DemodMode
 
 #: Association window for matching live channels to bookmarks (mirrors the
@@ -193,8 +194,7 @@ def serialize_user_channels(channels: UserChannels) -> str:
 
 def save_user_channels(channels: UserChannels, path: Path | None = None) -> Path:
     path = path or channels_file_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(serialize_user_channels(channels), encoding="utf-8")
+    write_text_atomic(path, serialize_user_channels(channels))
     return path
 
 

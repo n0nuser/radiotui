@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import time
 import wave
@@ -64,6 +65,10 @@ from radiotui.tui.widgets.spectrum import SpectrumBar
 from radiotui.tuning import decay_peak_db, guess_demod, parse_tune_request
 
 GAIN_MIN, GAIN_MAX, GAIN_STEP = 0.0, 49.6, 4.8
+
+#: Quit-time wait for the monitor teardown: ChannelMonitor.stop joins its
+#: reader and demod threads for up to 5 s each, plus the device close.
+TEARDOWN_WAIT_S = 11.0
 
 KEY_DISPLAYS = {"plus": "+", "minus": "-", "question_mark": "?", "enter": "enter"}
 
@@ -228,7 +233,7 @@ class SettingRow:
 
 
 class SettingsModal(ModalScreen):
-    """Navigable list of the knobs a radio user actually touches (#23)."""
+    """Navigable list of the knobs a radio user actually touches."""
 
     BINDINGS = [
         Binding("escape,q", "dismiss", "Close"),
@@ -415,6 +420,7 @@ class RadioTuiApp(App):
         self._overflow_band_index = -1
         self._monitor_stops_pending = 0
         self._stops_lock = threading.Lock()  # the shutdown teardown thread counts too
+        self._teardown_thread: threading.Thread | None = None
         self._shutting_down = False
         self.bias_tee_on = False
         self.hf_active = False
@@ -1457,8 +1463,9 @@ class RadioTuiApp(App):
         if monitor is not None:
             # Textual starts no new workers while unmounting, so a worker here
             # would never run: the monitor would keep reading and the device
-            # would never close. A plain non-daemon thread finishes the stop,
-            # and the device close, before the process exits.
+            # would never close. A plain thread finishes the stop and the
+            # device close; run_tui waits for it, but only for a bounded time,
+            # because a wedged USB read or audio pipe can block stop() forever.
             with self._stops_lock:
                 self._monitor_stops_pending += 1
 
@@ -1467,9 +1474,20 @@ class RadioTuiApp(App):
                 if self._monitor_stop_done():
                     self._close_device()
 
-            threading.Thread(target=final_stop, name="tuner-teardown").start()
+            self._teardown_thread = threading.Thread(
+                target=final_stop, name="tuner-teardown", daemon=True
+            )
+            self._teardown_thread.start()
         elif self._monitor_stops_pending == 0:
             self._close_device()
+
+    def wait_for_teardown(self, timeout_s: float) -> bool:
+        """Wait for the quit-time monitor teardown; False if it is still stuck."""
+        thread = self._teardown_thread
+        if thread is None:
+            return True
+        thread.join(timeout_s)
+        return not thread.is_alive()
 
     def _close_device(self) -> None:
         if self.device is not None:
@@ -1511,4 +1529,7 @@ def run_tui(
         start_sweeper=True,
     )
     app.run()
+    if not app.wait_for_teardown(timeout_s=TEARDOWN_WAIT_S):
+        # The daemon thread dies with the process; the OS reclaims the dongle.
+        print("radiotui: tuner teardown did not finish; device left to the OS", file=sys.stderr)
     return 0

@@ -12,6 +12,7 @@ import time
 from textual.widgets import Static
 
 from radiotui.core.models import DemodMode
+from radiotui.scanner.monitor import ChannelMonitor
 from radiotui.tui.app import RadioTuiApp
 
 
@@ -135,4 +136,27 @@ async def test_quit_while_listening_stops_monitor_and_closes_device() -> None:
             break
         time.sleep(0.05)
     assert not leaked
+    assert app.device is None
+
+
+async def test_quit_teardown_is_bounded_when_monitor_stop_hangs(monkeypatch) -> None:
+    """A wedged reader (USB read, stalled audio pipe) must not hang the process on quit."""
+    release = threading.Event()
+    real_stop = ChannelMonitor.stop
+
+    def wedged_stop(self) -> None:
+        release.wait()
+        real_stop(self)
+
+    monkeypatch.setattr(ChannelMonitor, "stop", wedged_stop)
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        app.start_monitor(100_000_000, DemodMode.WFM, muted=True, enable_recorder=False)
+        await pilot.pause(0.3)
+    t0 = time.monotonic()
+    assert not app.wait_for_teardown(timeout_s=0.1)
+    assert time.monotonic() - t0 < 3.0
+    release.set()
+    assert app.wait_for_teardown(timeout_s=6.0)
     assert app.device is None

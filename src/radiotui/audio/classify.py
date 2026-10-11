@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from enum import Enum
 
 import numpy as np
 
@@ -26,7 +27,7 @@ SPEECH_LO_HZ = 300.0
 SPEECH_HI_HZ = 3000.0
 
 
-class SignalClass:
+class SignalClass(str, Enum):
     SILENCE = "silence"
     NOISE = "noise"
     SIGNAL = "signal"
@@ -39,7 +40,7 @@ class AudioVerdict:
     flatness: float
     speech_share: float
     score: float
-    klass: str
+    klass: SignalClass
 
 
 def _smooth_envelope(audio: np.ndarray, fs: float) -> np.ndarray:
@@ -56,18 +57,20 @@ def _envelope_modulation(envelope: np.ndarray) -> float:
     return float(np.std(envelope) / mean)
 
 
-def _spectral_flatness(audio: np.ndarray) -> float:
+def _power_spectrum(audio: np.ndarray) -> np.ndarray:
+    return np.abs(np.fft.rfft(audio * np.hanning(len(audio)))) ** 2
+
+
+def _spectral_flatness(spec: np.ndarray) -> float:
     """Geometric/arithmetic mean ratio of the power spectrum (1.0 = white)."""
-    spec = np.abs(np.fft.rfft(audio * np.hanning(len(audio)))) ** 2
     spec = spec[1:] + 1e-12  # skip DC, avoid log(0)
     log_mean = float(np.exp(np.mean(np.log(spec))))
     arith_mean = float(np.mean(spec))
     return log_mean / arith_mean
 
 
-def _speech_band_share(audio: np.ndarray, fs: float) -> float:
-    spec = np.abs(np.fft.rfft(audio * np.hanning(len(audio)))) ** 2
-    freqs = np.fft.rfftfreq(len(audio), 1 / fs)
+def _speech_band_share(spec: np.ndarray, n: int, fs: float) -> float:
+    freqs = np.fft.rfftfreq(n, 1 / fs)
     total = float(spec.sum())
     if total <= 0:
         return 0.0
@@ -91,8 +94,9 @@ def classify_block(
 
     envelope = _smooth_envelope(audio, fs)
     modulation = min(_envelope_modulation(envelope), 2.0) / 2.0
-    flatness = _spectral_flatness(audio)
-    speech_share = _speech_band_share(audio, fs)
+    spec = _power_spectrum(audio)
+    flatness = _spectral_flatness(spec)
+    speech_share = _speech_band_share(spec, len(audio), fs)
 
     score = 0.4 * modulation + 0.35 * (1.0 - flatness) + 0.25 * min(speech_share * 2.0, 1.0)
     if score >= noise_max_score:
