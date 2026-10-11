@@ -197,6 +197,65 @@ def tuner_consumers(app) -> int:
     return count
 
 
+class ConsumerSampler:
+    """Background sampler of the peak tuner consumer count."""
+
+    def __init__(self, app) -> None:
+        self.peak = 0
+        self._running = True
+        self._thread = threading.Thread(target=self._sample, args=(app,), daemon=True)
+        self._thread.start()
+
+    def _sample(self, app) -> None:
+        while self._running:
+            self.peak = max(self.peak, tuner_consumers(app))
+            time.sleep(0.005)
+
+    def stop(self) -> int:
+        self._running = False
+        self._thread.join()
+        return self.peak
+
+
+async def wait_until(pilot, predicate, timeout_s: float = 20.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if predicate():
+            return True
+        await pilot.pause(0.1)
+    return False
+
+
+async def test_user_listen_preempts_hold_and_next_hold_still_parks() -> None:
+    settings = Settings(
+        scanner=ScannerSettings(
+            hop_dwell_s=0.02, min_persist_frames=1, hold_release_s=30.0, max_hold_s=60.0
+        )
+    )
+    app = RadioTuiApp(force_sim=True, settings=settings, start_sweeper=True)
+    sampler = ConsumerSampler(app)
+    try:
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.press("o")
+            assert await wait_until(pilot, lambda: app.auto_hold_freq is not None)
+            app.listen_frequency(96.0e6)
+            assert await wait_until(
+                pilot, lambda: app.monitor is not None and app.auto_hold_freq is None
+            )
+            assert not app.sweeper.running
+            app.action_stop_listen()
+            # Sweeping resumes and the next hold parks the sweeper again.
+            assert await wait_until(pilot, lambda: app.auto_hold_freq is not None)
+            sweeps = app.sweeper.sweeps_done
+            await pilot.pause(0.5)
+            assert app.sweeper.holding_active()
+            assert app.sweeper.sweeps_done == sweeps
+            app.sweeper.stop()
+    finally:
+        peak = sampler.stop()
+    assert peak <= 1
+
+
 async def test_tui_autonomous_hold_cycles_end_to_end() -> None:
     settings = Settings(
         scanner=ScannerSettings(

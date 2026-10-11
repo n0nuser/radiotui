@@ -24,7 +24,7 @@ use.
 | Thread | Owner | Talks to the UI via |
 | --- | --- | --- |
 | Textual event loop | `RadioTuiApp` | n/a |
-| `sweeper` | `scanner.sweeper.Sweeper` | bounded `queue.Queue[ScanState]` (maxsize 4, drops when full), drained by `RadioTuiApp.poll_queue` every 0.15 s; only the latest state is used |
+| `sweeper` | `scanner.sweeper.Sweeper` | bounded `queue.Queue[ScanState]` (maxsize 4, drops when full, except that a hold-carrying state blocks until queued), drained by `RadioTuiApp.poll_queue` every 0.15 s; only the latest state is used |
 | `monitor-<MHz>` | `scanner.monitor.ChannelMonitor` | `on_rssi` / `on_error` callbacks that the app wires to `post_message` (`RssiUpdate`, `MonitorError`); recorder clips arrive as `ClipSaved` |
 | teardown worker | `RadioTuiApp._stop_monitor_worker` (`run_worker(thread=True)`) | `call_from_thread(_monitor_stop_finished, callback)` |
 | player subprocess | `audio.player.AudioPlayer` | none (`ffplay` or `aplay` fed PCM over stdin) |
