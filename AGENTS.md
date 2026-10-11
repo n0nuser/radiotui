@@ -47,3 +47,17 @@ job runs the full suite.
   ADR first, then record the new decision as described in
   [docs/adr/README.md](docs/adr/README.md)
 - **Retracing why something is the way it is**: [docs/reasoning_logs/](docs/reasoning_logs/)
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on n0nuser/radiotui via `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` (created lazily) plus `docs/adr/`. See `docs/agents/domain.md`.
