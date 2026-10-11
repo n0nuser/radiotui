@@ -12,15 +12,10 @@ def meter_text(app: RadioTuiApp) -> str:
     return str(app.query_one("#meter", Static).render())
 
 
-async def open_radio_app(tmp_path=None):
+async def open_radio_app():
     from radiotui.config import Settings
 
-    kwargs = {}
-    if tmp_path is not None:
-        from radiotui.channels_file import channels_file_path  # noqa: F401
-
-        kwargs["channels_path"] = tmp_path / "channels.toml"
-    app = RadioTuiApp(force_sim=True, settings=Settings(), **kwargs)
+    app = RadioTuiApp(force_sim=True, settings=Settings())
     async with app.run_test(size=(140, 40)) as pilot:
         if app.sweeper is not None:
             app.sweeper.stop()

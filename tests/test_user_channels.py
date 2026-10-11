@@ -13,6 +13,7 @@ from radiotui.channels_file import (
     IgnoreEntry,
     UserChannels,
     add_ignore,
+    channels_file_path,
     load_user_channels,
     parse_user_channels,
     remove_ignore,
@@ -30,6 +31,13 @@ T0 = 1_000_000.0
 
 def book_path(tmp_path):
     return tmp_path / "channels.toml"
+
+
+def user_book_path():
+    """The default channels file, which the autouse fixture keeps in tmp_path."""
+    path = channels_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def make_channel(
@@ -241,11 +249,11 @@ def table_cell(table: DataTable, row_key: str) -> str:
     return str(table.get_row(row_key)[0])
 
 
-async def test_startup_loads_bookmarks_into_table_names(tmp_path):
-    path = book_path(tmp_path)
+async def test_startup_loads_bookmarks_into_table_names():
+    path = user_book_path()
     path.write_text(VALID_TOML, encoding="utf-8")
     settings = Settings(scanner=ScannerSettings(min_persist_frames=1))
-    app = RadioTuiApp(force_sim=True, channels_path=path, settings=settings)
+    app = RadioTuiApp(force_sim=True, settings=settings)
     async with app.run_test(size=(140, 40)) as pilot:
         if app.sweeper is not None:
             app.sweeper.stop()
@@ -262,17 +270,17 @@ async def test_startup_loads_bookmarks_into_table_names(tmp_path):
         assert table_cell(table, "145505000.0") == "2m calling"
 
 
-async def test_startup_warns_on_malformed_file(tmp_path):
-    path = book_path(tmp_path)
+async def test_startup_warns_on_malformed_file():
+    path = user_book_path()
     path.write_text("{{{ broken", encoding="utf-8")
-    app = RadioTuiApp(force_sim=True, channels_path=path)
+    app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.3)
         assert "channels file ignored" in log_text(app)
 
 
-async def test_b_keys_prompt_saves_named_bookmark(tmp_path):
-    app = RadioTuiApp(force_sim=True, channels_path=book_path(tmp_path))
+async def test_b_keys_prompt_saves_named_bookmark():
+    app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         if app.sweeper is not None:
             app.sweeper.stop()
@@ -284,7 +292,7 @@ async def test_b_keys_prompt_saves_named_bookmark(tmp_path):
             await pilot.press(key)
         await pilot.press("enter")
         await pilot.pause(0.3)
-        saved, warning = load_user_channels(book_path(tmp_path))
+        saved, warning = load_user_channels(user_book_path())
         assert warning is None
         assert saved.bookmarks == [Bookmark(145.5e6, "2m call", DemodMode.WFM)]
         table = app.query_one("#channels", DataTable)
@@ -292,8 +300,8 @@ async def test_b_keys_prompt_saves_named_bookmark(tmp_path):
         assert "bookmarked" in log_text(app)
 
 
-async def test_escape_cancels_bookmark_without_writing(tmp_path):
-    app = RadioTuiApp(force_sim=True, channels_path=book_path(tmp_path))
+async def test_escape_cancels_bookmark_without_writing():
+    app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         if app.sweeper is not None:
             app.sweeper.stop()
@@ -303,12 +311,12 @@ async def test_escape_cancels_bookmark_without_writing(tmp_path):
         await pilot.pause(0.2)
         await pilot.press("escape")
         await pilot.pause(0.2)
-        assert not book_path(tmp_path).exists()
+        assert not user_book_path().exists()
         assert "cancelled" in log_text(app)
 
 
-async def test_x_ignores_selected_channel_and_persists(tmp_path):
-    app = RadioTuiApp(force_sim=True, channels_path=book_path(tmp_path))
+async def test_x_ignores_selected_channel_and_persists():
+    app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         if app.sweeper is not None:
             app.sweeper.stop()
@@ -317,16 +325,16 @@ async def test_x_ignores_selected_channel_and_persists(tmp_path):
         app.refresh_table(channels)
         await pilot.press("x")
         await pilot.pause(0.3)
-        saved, warning = load_user_channels(book_path(tmp_path))
+        saved, warning = load_user_channels(user_book_path())
         assert warning is None
         assert saved.ignores == [IgnoreEntry(145.5e6)]
         assert "ignored" in log_text(app)
 
 
-async def test_shift_x_unignores_selected_channel(tmp_path):
-    path = book_path(tmp_path)
+async def test_shift_x_unignores_selected_channel():
+    path = user_book_path()
     path.write_text("[[ignore]]\nfreq_hz = 145500000\n", encoding="utf-8")
-    app = RadioTuiApp(force_sim=True, channels_path=path)
+    app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.1)
         channels = await seed_table(app, 145.5e6)
