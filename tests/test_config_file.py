@@ -228,7 +228,9 @@ def test_config_errors_exit_cleanly(text, argv, needle, capsys):
     assert main(argv) == 2
     out = capsys.readouterr().out
     assert "Traceback" not in out
-    assert needle in out
+    errors = [line for line in out.splitlines() if "Config error" in line]
+    assert len(errors) == 1  # one unwrapped line, even for long paths
+    assert needle in errors[0]
 
 
 @pytest.mark.parametrize(
@@ -257,3 +259,12 @@ def test_sidecar_reports_applied_hardware_settings():
     assert hardware["freq_correction_ppm"] == -70
     assert hardware["bias_tee"] is True
     assert hardware["offset_tune"] is True
+
+
+def test_scan_export_reports_applied_hardware_settings():
+    target = Path("found.json")
+    argv = ["scan", "--sim", "--band", "fm_broadcast", "--ppm", "-70", "--no-bias-tee"]
+    assert main([*argv, "--seconds", "2", "--export", str(target)]) == 0
+    context = json.loads(target.read_text(encoding="utf-8"))["context"]
+    assert context["freq_correction_ppm"] == -70
+    assert context["bias_tee"] is False
