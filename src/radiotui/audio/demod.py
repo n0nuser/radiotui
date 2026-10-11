@@ -1,6 +1,6 @@
 """Demodulation and audio conditioning (numpy only).
 
-Receive chain (#18): channel-filter to the band's ``channel_bw_hz``, decimate,
+Receive chain (ADR 0013): channel-filter to the band's ``channel_bw_hz``, decimate,
 demodulate, then resample to the output rate. De-emphasis is a truncated-FIR
 single-pole equivalent carried across blocks — no per-sample Python loop —
 and AM level is held by a slow AGC instead of per-block peak normalization.

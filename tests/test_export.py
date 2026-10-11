@@ -6,6 +6,8 @@ import subprocess
 import sys
 from datetime import datetime
 
+import pytest
+
 from radiotui.core.models import Channel, DemodMode
 from radiotui.export import export_channels, export_path_for
 from radiotui.tui.app import RadioTuiApp
@@ -116,3 +118,19 @@ async def test_tui_e_key_without_channels_is_a_noop(tmp_path):
         await pilot.press("e")
         await pilot.pause(0.3)
         assert not list(tmp_path.glob("radiotui-*"))
+
+
+@pytest.mark.parametrize("name", ["found.csv", "found.json"])
+def test_failed_export_keeps_the_previous_file(tmp_path, monkeypatch, name):
+    """The periodic headless export overwrites in place; a crash must not empty it."""
+    path = tmp_path / name
+    path.write_text("previous", encoding="utf-8")
+
+    def failing_replace(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("os.replace", failing_replace)
+    with pytest.raises(OSError):
+        export_channels([make_channel(100e6)], path)
+    assert path.read_text(encoding="utf-8") == "previous"
+    assert [p.name for p in tmp_path.iterdir()] == [name]

@@ -23,7 +23,6 @@ class SimCarrier:
     burst_period_s: float = 6.0
     burst_offset_s: float = 0.0
     phase: float = field(default_factory=lambda: float(np.random.uniform(0, 2 * np.pi)))
-    _burst_phase: float = field(default=0.0, repr=False)
 
 
 DEFAULT_ENVIRONMENT: list[SimCarrier] = [
@@ -60,6 +59,9 @@ class SimulatedDevice(SdrDevice):
         self._center_hz = 100.0e6
         self._sample_rate = 1_024_000.0
         self._t = 0.0
+        # Running integral of each FM carrier's modulation, so phase stays
+        # continuous across reads (a restart per read clicks at block rate).
+        self._fm_integral = [0.0] * len(self._carriers)
 
     @property
     def center_freq_hz(self) -> float:
@@ -92,7 +94,7 @@ class SimulatedDevice(SdrDevice):
         )
 
         span = fs * 0.55
-        for carrier in self._carriers:
+        for index, carrier in enumerate(self._carriers):
             offset = carrier.freq_hz - self._center_hz
             if abs(offset) > span:
                 continue
@@ -113,7 +115,9 @@ class SimulatedDevice(SdrDevice):
                     + 0.7 * np.sin(2 * np.pi * 1300 * t + 2.1 * carrier.phase)
                     + 0.4 * np.sin(2 * np.pi * 2400 * t + 0.7 * carrier.phase)
                 )
-                inst_phase = 2 * np.pi * (offset * t + dev_scale * 1_200 * np.cumsum(voice) / fs)
+                integral = self._fm_integral[index] + np.cumsum(voice) / fs
+                self._fm_integral[index] = float(integral[-1])
+                inst_phase = 2 * np.pi * (offset * t + dev_scale * 1_200 * integral)
                 sig = amp * np.exp(1j * inst_phase) * envelope
             iq += sig.astype(np.complex128)
 
