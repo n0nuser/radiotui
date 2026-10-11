@@ -970,8 +970,10 @@ class RadioTuiApp(App):
     def _engage_auto_hold(self, req) -> None:
         if self.sweeper is None or not self.sweeper.running:
             return
-        if not self.settings.scanner.autonomous or self.monitor is not None:
-            self.sweeper.release_hold()  # don't leave it parked on a refused hold
+        if self.monitor is not None:
+            return
+        if not self.settings.scanner.autonomous:
+            self.sweeper.release_hold()  # toggled off before it engaged: no reader yet
             return
         self.auto_hold_freq = req.freq_hz
         self._auto_hold_started_at = time.time()
