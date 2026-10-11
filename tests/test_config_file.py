@@ -1,14 +1,19 @@
 """Issue #16: optional TOML config file with defaults < file < CLI flags precedence."""
 
 import dataclasses
+import json
+import re
+from pathlib import Path
 
 import pytest
 
+from radiotui.cli import main, resolve_args
 from radiotui.config import BANDS, Settings, band_by_name
 from radiotui.config_file import (
     ConfigError,
     apply_config_to_settings,
     apply_hardware_defaults,
+    config_path,
     load_config,
     register_user_bands,
     runtime_settings,
@@ -147,3 +152,119 @@ def test_unknown_section_rejected(cfg_path):
     with pytest.raises(ConfigError) as excinfo:
         load_config(cfg_path)
     assert "scannr" in str(excinfo.value)
+
+
+# ---- issue #59: optional fields, clean errors, --no-* flags, sidecars ----
+
+
+def write_user_config(text: str) -> None:
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def readme_config_snippets() -> list[str]:
+    readme = (Path(__file__).parent.parent / "README.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```toml\n(.*?)```", readme, flags=re.S)
+    # channels.toml snippets are covered by test_user_channels.py
+    return [b for b in blocks if "[[bookmark]]" not in b and "[[ignore]]" not in b]
+
+
+@pytest.mark.parametrize("snippet", readme_config_snippets())
+def test_readme_config_snippets_parse(snippet, capsys):
+    write_user_config(snippet)
+    before = set(BANDS)
+    try:
+        assert main(["config"]) == 0
+    finally:
+        for name in set(BANDS) - before:
+            BANDS.pop(name)
+    assert "error" not in capsys.readouterr().out.lower()
+
+
+def test_readme_has_a_config_snippet():
+    assert readme_config_snippets()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("squelch_rssi_dbfs = -30", -30.0),
+        ("squelch_rssi_dbfs = -30.5", -30.5),
+        ("", None),  # omitting the key disables the gate
+    ],
+)
+def test_optional_field_round_trips(cfg_path, text, expected):
+    cfg_path.write_text(f"[scanner]\n{text}\ngain_db = 28\n")
+    settings = Settings()
+    apply_config_to_settings(settings, load_config(cfg_path), cfg_path)
+    assert settings.scanner.squelch_rssi_dbfs == expected
+    assert settings.scanner.gain_db == 28.0
+    assert isinstance(settings.scanner.gain_db, float)
+
+
+@pytest.mark.parametrize("value", ['"off"', "true"])
+def test_optional_field_rejects_non_numbers(cfg_path, value):
+    cfg_path.write_text(f"[scanner]\nsquelch_rssi_dbfs = {value}\n")
+    with pytest.raises(ConfigError, match="squelch_rssi_dbfs"):
+        apply_config_to_settings(Settings(), load_config(cfg_path), cfg_path)
+
+
+@pytest.mark.parametrize(
+    ("text", "argv", "needle"),
+    [
+        ("[scanner]\nfft_size = 2\n", ["scan", "--sim", "--band", "fm_broadcast"], "fft_size"),
+        ("[scanner]\nfft_size = 2\n", ["config"], "fft_size"),
+        ("[audio]\ndeemphasis_us = 60\n", ["scan", "--sim", "--band", "fm_broadcast"], "50"),
+        (
+            '[hardware]\ngain_db = "x"\n',
+            ["scan", "--sim", "--band", "fm_broadcast"],
+            "[hardware] gain_db",
+        ),
+    ],
+)
+def test_config_errors_exit_cleanly(text, argv, needle, capsys):
+    write_user_config(text)
+    assert main(argv) == 2
+    out = capsys.readouterr().out
+    assert "Traceback" not in out
+    errors = [line for line in out.splitlines() if "Config error" in line]
+    assert len(errors) == 1  # one unwrapped line, even for long paths
+    assert needle in errors[0]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--no-bias-tee", "--no-offset-tune", "scan", "--band", "fm_broadcast"],
+        ["scan", "--band", "fm_broadcast", "--no-bias-tee", "--no-offset-tune"],
+    ],
+)
+def test_no_flags_override_file(argv):
+    data = {"hardware": {"bias_tee": True, "offset_tune": True}}
+    args = resolve_args(argv, data)
+    assert args.bias_tee is False
+    assert args.offset_tune is False
+    assert resolve_args(["scan", "--band", "fm_broadcast"], data).bias_tee is True
+
+
+def test_sidecar_reports_applied_hardware_settings():
+    write_user_config("[hardware]\nbias_tee = true\n")
+    assert (
+        main(["record", "--sim", "--ppm", "-70", "--offset-tune", "--seconds", "2", "89.005M"]) == 0
+    )
+    sidecars = list(Path("recordings").glob("*.json"))
+    assert sidecars, "no clip recorded"
+    hardware = json.loads(sidecars[0].read_text(encoding="utf-8"))["hardware"]
+    assert hardware["freq_correction_ppm"] == -70
+    assert hardware["bias_tee"] is True
+    assert hardware["offset_tune"] is True
+
+
+def test_scan_export_reports_applied_hardware_settings():
+    target = Path("found.json")
+    argv = ["scan", "--sim", "--band", "fm_broadcast", "--ppm", "-70", "--no-bias-tee"]
+    assert main([*argv, "--seconds", "2", "--export", str(target)]) == 0
+    context = json.loads(target.read_text(encoding="utf-8"))["context"]
+    assert context["freq_correction_ppm"] == -70
+    assert context["bias_tee"] is False
