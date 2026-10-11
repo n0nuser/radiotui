@@ -35,16 +35,22 @@ BUILTIN_BAND_NAMES = tuple(BANDS)
 
 REGIONAL_BAND_EDGES = {
     "r1": {
-        "hf_ham_80m": (3.5e6, 3.8e6), "hf_ham_40m": (7.0e6, 7.2e6),
-        "vhf_ham": (144e6, 146e6), "uhf_ham": (430e6, 440e6),
+        "hf_ham_80m": (3.5e6, 3.8e6),
+        "hf_ham_40m": (7.0e6, 7.2e6),
+        "vhf_ham": (144e6, 146e6),
+        "uhf_ham": (430e6, 440e6),
     },
     "r2": {
-        "hf_ham_80m": (3.5e6, 4.0e6), "hf_ham_40m": (7.0e6, 7.3e6),
-        "vhf_ham": (144e6, 148e6), "uhf_ham": (420e6, 450e6),
+        "hf_ham_80m": (3.5e6, 4.0e6),
+        "hf_ham_40m": (7.0e6, 7.3e6),
+        "vhf_ham": (144e6, 148e6),
+        "uhf_ham": (420e6, 450e6),
     },
     "r3": {
-        "hf_ham_80m": (3.5e6, 3.9e6), "hf_ham_40m": (7.0e6, 7.2e6),
-        "vhf_ham": (144e6, 146e6), "uhf_ham": (430e6, 440e6),
+        "hf_ham_80m": (3.5e6, 3.9e6),
+        "hf_ham_40m": (7.0e6, 7.2e6),
+        "vhf_ham": (144e6, 146e6),
+        "uhf_ham": (430e6, 440e6),
     },
 }
 
