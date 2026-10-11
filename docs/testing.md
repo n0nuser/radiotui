@@ -9,7 +9,7 @@ dongle: they use `force_sim=True` or a fake device.
 Copy the shape of `open_radio_app` in `tests/test_radio_view.py`:
 
 ```python
-app = RadioTuiApp(force_sim=True, settings=Settings(), channels_path=tmp_path / "channels.toml")
+app = RadioTuiApp(force_sim=True, settings=Settings())
 async with app.run_test(size=(140, 40)) as pilot:
     ...
 ```
@@ -20,10 +20,13 @@ async with app.run_test(size=(140, 40)) as pilot:
   `RadioTuiApp` defaults to `start_sweeper=False` (only `run_tui` passes
   `True`). If a test passes `start_sweeper=True` or presses `s`, call
   `app.sweeper.stop()` before it drives keys.
-- **Point user files at `tmp_path`.** With `channels_path=None` the app loads
-  the developer's real `~/.config/radiotui/channels.toml`, and `b`, `x` or
-  `Shift-X` would write to it. Set `app.settings.audio.recordings_dir` to
-  `tmp_path` for anything that records or exports.
+- **User files are isolated for you.** The autouse `isolate_user_files`
+  fixture in `tests/conftest.py` points `HOME`, `USERPROFILE` and
+  `XDG_CONFIG_HOME` at `tmp_path` and makes it the working directory, so
+  `config.toml`, `channels.toml` and the relative default `recordings/` all
+  land there. Write fixture files to `channels_file_path()` or
+  `config_path()`; don't pass `channels_path`. `tests/test_isolation.py`
+  fails if a path escapes to the real `~/.config/radiotui`.
 - **Restore global registries.** Tests that add to `config.BANDS` remove the
   entry in a `finally` (see `tests/test_tui_bands.py`).
 - **Use a fixed `size=`.** Layout assertions depend on it.
