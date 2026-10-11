@@ -126,7 +126,11 @@ async def test_quit_while_listening_stops_monitor_and_closes_device() -> None:
         await pilot.pause(0.3)
     deadline = time.time() + 6.0
     while time.time() < deadline:
-        leaked = [t for t in set(threading.enumerate()) - before if t.name.startswith("monitor-")]
+        leaked = [
+            t
+            for t in set(threading.enumerate()) - before
+            if t.name.startswith(("monitor-", "reader-"))
+        ]
         if not leaked and app.device is None:
             break
         time.sleep(0.05)

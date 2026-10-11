@@ -25,6 +25,7 @@ use.
 | --- | --- | --- |
 | Textual event loop | `RadioTuiApp` | n/a |
 | `sweeper` | `scanner.sweeper.Sweeper` | bounded `queue.Queue[ScanState]` (maxsize 4, drops when full, except that a hold-carrying state blocks until queued), drained by `RadioTuiApp.poll_queue` every 0.15 s; only the latest state is used |
+| `reader-<MHz>` | `scanner.monitor.ChannelMonitor` | none: the only thread that calls `read_samples` while listening; feeds a two-block queue to the demod thread ([ADR 0012](adr/0012-decoupled-reader-thread.md)) |
 | `monitor-<MHz>` | `scanner.monitor.ChannelMonitor` | `on_rssi` / `on_error` callbacks that the app wires to `post_message` (`RssiUpdate`, `MonitorError`); recorder clips arrive as `ClipSaved` |
 | teardown worker | `RadioTuiApp._stop_monitor_worker` (`run_worker(thread=True)`) | `call_from_thread(_monitor_stop_finished, callback)` |
 | player subprocess | `audio.player.AudioPlayer` | none (`ffplay` or `aplay` fed PCM over stdin) |
