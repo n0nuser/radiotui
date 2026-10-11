@@ -185,11 +185,16 @@ def test_auto_hold_release_reason_paths(silent_for, held_for, expected):
 # ---- issue #61: the TUI hold must engage, release and resume on its own ----
 
 
-def tuner_consumers(app) -> int:
-    """Threads reading the tuner: live monitors, plus the sweeper unless parked."""
+def tuner_consumers(app, ignore: set[threading.Thread]) -> int:
+    """Threads reading the tuner: live monitors, plus the sweeper unless parked.
+
+    ``ignore`` holds threads leaked by earlier tests in the same process.
+    """
     sweeper = app.sweeper
     count = 0
     for thread in threading.enumerate():
+        if thread in ignore:
+            continue
         if thread.name.startswith("monitor-"):
             count += 1
         elif thread.name == "sweeper" and not (sweeper is not None and sweeper.holding_active()):
@@ -202,13 +207,14 @@ class ConsumerSampler:
 
     def __init__(self, app) -> None:
         self.peak = 0
+        self._ignore = set(threading.enumerate())
         self._running = True
         self._thread = threading.Thread(target=self._sample, args=(app,), daemon=True)
         self._thread.start()
 
     def _sample(self, app) -> None:
         while self._running:
-            self.peak = max(self.peak, tuner_consumers(app))
+            self.peak = max(self.peak, tuner_consumers(app, self._ignore))
             time.sleep(0.005)
 
     def stop(self) -> int:
@@ -267,17 +273,7 @@ async def test_tui_autonomous_hold_cycles_end_to_end() -> None:
         )
     )
     app = RadioTuiApp(force_sim=True, settings=settings, start_sweeper=True)
-    peak_consumers = 0
-    sampling = True
-
-    def sample() -> None:
-        nonlocal peak_consumers
-        while sampling:
-            peak_consumers = max(peak_consumers, tuner_consumers(app))
-            time.sleep(0.005)
-
-    sampler = threading.Thread(target=sample, daemon=True)
-    sampler.start()
+    sampler = ConsumerSampler(app)
     try:
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause(0.2)
@@ -298,6 +294,5 @@ async def test_tui_autonomous_hold_cycles_end_to_end() -> None:
             assert app.sweeper.sweeps_done > sweeps or app.auto_hold_freq is not None
             app.sweeper.stop()
     finally:
-        sampling = False
-        sampler.join()
-    assert peak_consumers <= 1
+        peak = sampler.stop()
+    assert peak <= 1
