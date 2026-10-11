@@ -6,7 +6,6 @@ means built-in behaviour exactly.
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import sys
 import typing
@@ -72,19 +71,17 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     return data
 
 
-def _resolve_field_type(annotation: Any) -> Any:
-    """Resolve string annotations (PEP 563) and unwrap Optional[X] to X."""
-    if isinstance(annotation, str):
-        annotation = {
-            "float": float,
-            "int": int,
-            "bool": bool,
-            "str": str,
-        }.get(annotation, annotation)
-    if typing.get_origin(annotation) is typing.Union:
-        args = [a for a in typing.get_args(annotation) if a is not type(None)]
-        return args[0] if len(args) == 1 else object
-    return {"float": float, "int": int, "bool": bool, "str": str}.get(annotation, annotation)
+def _field_types(cls: type) -> dict[str, tuple[type, ...]]:
+    """Field name -> accepted runtime types, resolving PEP 563 strings.
+
+    ``float | None`` becomes ``(float,)``: a key that is present must hold a
+    value, and omitting it keeps the default (None disables the option).
+    """
+    types: dict[str, tuple[type, ...]] = {}
+    for name, hint in typing.get_type_hints(cls).items():
+        args = tuple(a for a in typing.get_args(hint) if a is not type(None))
+        types[name] = args or (hint,)
+    return types
 
 
 def _key_error(path: Path, message: str, key: str) -> ConfigError:
@@ -109,17 +106,17 @@ def apply_config_to_settings(
     for section in sorted(_SECTIONS):
         overrides = data.get(section) or {}
         target = getattr(settings, section)
-        fields = {f.name: f.type for f in dataclasses.fields(type(target))}
+        fields = _field_types(type(target))
         for key, value in overrides.items():
             if key not in fields:
                 raise _key_error(path, f"unknown key '[{section}]'", key)
-            expected = _resolve_field_type(fields[key])
-            if expected is float and isinstance(value, int) and not isinstance(value, bool):
+            expected = fields[key]
+            if float in expected and isinstance(value, int) and not isinstance(value, bool):
                 value = float(value)
             elif not isinstance(value, expected) or (
-                isinstance(value, bool) and expected is not bool
+                isinstance(value, bool) and bool not in expected
             ):
-                name = getattr(expected, "__name__", str(expected))
+                name = " or ".join(t.__name__ for t in expected)
                 raise _key_error(
                     path,
                     f"'[{section}] {key}' must be {name}, got {type(value).__name__} at",
@@ -230,6 +227,10 @@ def runtime_settings(args, data: dict[str, Any]) -> Settings:
     """Settings for this run: defaults <- config file <- CLI scanner flags."""
     settings = Settings()
     apply_config_to_settings(settings, data)
+    # Resolved hardware flags, so clip sidecars record what this run used.
+    settings.scanner.freq_correction_ppm = getattr(args, "ppm", 0)
+    settings.scanner.bias_tee = getattr(args, "bias_tee", False)
+    settings.scanner.offset_tune = getattr(args, "offset_tune", False)
     gain = args.gain if hasattr(args, "gain") else None
     if gain is None:
         gain = args._hw_gain_db

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -87,7 +88,7 @@ def add_hw_options(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """
     parser.add_argument(
         "--bias-tee",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
         help="power an LNA via bias tee (~4.5 V)",
     )
@@ -100,7 +101,7 @@ def add_hw_options(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--offset-tune",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
         help="tune LO offset by fs/4 (avoids DC spike)",
     )
@@ -353,6 +354,9 @@ def _export_sweep(channels, path_str: str, band: Band, settings, sweeper) -> Pat
         "start_hz": band.start_hz,
         "end_hz": band.end_hz,
         "gain_db": settings.scanner.gain_db,
+        "freq_correction_ppm": settings.scanner.freq_correction_ppm,
+        "bias_tee": settings.scanner.bias_tee,
+        "offset_tune": settings.scanner.offset_tune,
         "sample_rate_hz": effective_sample_rate(settings.scanner),
         "sweeps_completed": sweeper.sweeps_done,
     }
@@ -567,8 +571,8 @@ def cmd_config(args) -> int:
         return 0
     settings = Settings()
     apply_config_to_settings(settings, data, path)
-    console.print(f"[scanner] threshold_margin_db = {settings.scanner.threshold_margin_db}")
-    console.print(f"[audio] recordings_dir = {settings.audio.recordings_dir}")
+    console.print(escape(f"[scanner] threshold_margin_db = {settings.scanner.threshold_margin_db}"))
+    console.print(escape(f"[audio] recordings_dir = {settings.audio.recordings_dir}"))
     return 0
 
 
@@ -598,22 +602,18 @@ def main(argv: list[str] | None = None) -> int:
     use_config = "--no-config" not in argv
 
     data: dict = {}
-    if use_config:
-        try:
+    try:
+        if use_config:
             data = load_config()
             register_user_bands(data)
-        except ConfigError as exc:
-            console.print(f"[red]Config error:[/] {exc}")
-            return 2
-
-    try:
         args = resolve_args(argv, data)
+        if args.command == "config":
+            return cmd_config(args)
+        args._settings = runtime_settings(args, data)
     except ConfigError as exc:
-        console.print(f"[red]Config error:[/] {exc}")
+        # escape: "[scanner]" in a message is not Rich markup
+        console.print(f"[red]Config error:[/] {escape(str(exc))}", soft_wrap=True)
         return 2
-    if args.command == "config":
-        return cmd_config(args)
-    args._settings = runtime_settings(args, data)
     if not args.command or args.command == "tui":
         return run_tui(
             force_sim=args.sim,
