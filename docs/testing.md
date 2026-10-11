@@ -1,0 +1,55 @@
+# Testing
+
+`uv run pytest` runs everything. `asyncio_mode = "auto"` is set in
+`pyproject.toml`, so `async def test_*` needs no marker. Tests never need a
+dongle: they use `force_sim=True` or a fake device.
+
+## TUI tests
+
+Copy the shape of `open_radio_app` in `tests/test_radio_view.py`:
+
+```python
+app = RadioTuiApp(force_sim=True, settings=Settings(), channels_path=tmp_path / "channels.toml")
+async with app.run_test(size=(140, 40)) as pilot:
+    ...
+```
+
+- **Keep the process CPU-idle.** Textual's `wait_for_idle` only returns early
+  when the whole process is idle, so every `pilot.press` against a running
+  SIM sweeper burns about 2 s and a key-heavy test appears to hang.
+  `RadioTuiApp` defaults to `start_sweeper=False` (only `run_tui` passes
+  `True`). If a test passes `start_sweeper=True` or presses `s`, call
+  `app.sweeper.stop()` before it drives keys.
+- **Point user files at `tmp_path`.** With `channels_path=None` the app loads
+  the developer's real `~/.config/radiotui/channels.toml`, and `b`, `x` or
+  `Shift-X` would write to it. Set `app.settings.audio.recordings_dir` to
+  `tmp_path` for anything that records or exports.
+- **Restore global registries.** Tests that add to `config.BANDS` remove the
+  entry in a `finally` (see `tests/test_tui_bands.py`).
+- **Use a fixed `size=`.** Layout assertions depend on it.
+
+## Thread and DSP tests
+
+- **Fake devices:** subclass `sdr.base.SdrDevice` and return synthetic IQ from
+  `read_samples` (`CountingDevice` in `tests/test_squelch_controls.py`).
+- **Sweeper tests:** build a `SweepPlan` and a `queue.Queue`, then wait on the
+  queue with a deadline. Don't use fixed sleeps.
+- **Audio chain changes:** keep the equivalence tests against reference
+  implementations (for example `deemphasize_loop`) passing
+  ([ADR 0002](adr/0002-numpy-only-receive-chain.md)).
+- Use `monkeypatch` to override attributes. Don't assign and suppress the
+  type error.
+
+## Debugging a hang
+
+Pytest and Textual both capture output, which hides where a test is stuck.
+
+- Run with `-s` so `faulthandler.dump_traceback_later` output on fd 2 is
+  visible.
+- Inside a running Textual app, stdout is captured, so log with
+  `os.write(2, ...)`.
+- Textual calls every event handler definition along the MRO. Subclassing
+  the app to add probes can cause spurious errors such as a duplicate
+  `on_mount`.
+
+[The full investigation is in docs/reasoning_logs/2026-08-22-textual-test-hang.md.](reasoning_logs/2026-08-22-textual-test-hang.md)

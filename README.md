@@ -276,6 +276,8 @@ src/radiotui/
 
 Deeper material under [`docs/`](docs/):
 
+- `docs/architecture.md` — thread model, tuner handoff, autonomous hold.
+- `docs/testing.md` — TUI test harness, fake devices, debugging hangs.
 - `docs/adr/` — architecture decision records (why the DSP is numpy-only, how
   tuner exclusivity works, where user channels live, ...).
 - `docs/research/` — measurement studies with numbers: audio chain redesign,

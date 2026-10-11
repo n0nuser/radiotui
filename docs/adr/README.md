@@ -18,3 +18,13 @@ Numbered in the order the decision was made. Status is `Accepted` unless noted.
 
 Studies and alternatives investigated during these decisions live in
 [`../research/`](../research/) and [`../reasoning_logs/`](../reasoning_logs/).
+
+## Adding an ADR
+
+Write an ADR when a change picks between real alternatives, or reverses an
+existing ADR (mark the old one `Superseded by NNNN`). Copy the shape of
+[0004](0004-single-consumer-tuner.md): a Status and Date header, then the
+Context, Alternatives considered, Decision and Consequences sections. Name the
+file `NNNN-kebab-slug.md` with the next free number, and add a row to the
+table above. Put the measurements that justify a decision in `../research/`
+and link to them from the ADR.
