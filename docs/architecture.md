@@ -24,7 +24,7 @@ use.
 | Thread | Owner | Talks to the UI via |
 | --- | --- | --- |
 | Textual event loop | `RadioTuiApp` | n/a |
-| `sweeper` | `scanner.sweeper.Sweeper` | bounded `queue.Queue[ScanState]` (maxsize 4, drops when full), drained by `RadioTuiApp.poll_queue` every 0.15 s; only the latest state is used |
+| `sweeper` | `scanner.sweeper.Sweeper` | bounded `queue.Queue[ScanState]` (maxsize 4, drops when full, except that a hold-carrying state blocks until queued), drained by `RadioTuiApp.poll_queue` every 0.15 s; only the latest state is used |
 | `monitor-<MHz>` | `scanner.monitor.ChannelMonitor` | `on_rssi` / `on_error` callbacks that the app wires to `post_message` (`RssiUpdate`, `MonitorError`); recorder clips arrive as `ClipSaved` |
 | teardown worker | `RadioTuiApp._stop_monitor_worker` (`run_worker(thread=True)`) | `call_from_thread(_monitor_stop_finished, callback)` |
 | player subprocess | `audio.player.AudioPlayer` | none (`ffplay` or `aplay` fed PCM over stdin) |
@@ -69,10 +69,19 @@ refused. See [ADR 0011](adr/0011-asynchronous-monitor-handoff.md).
 
 With `scanner.autonomous` set, the sweeper picks a `HoldRequest` from active
 channels (`_auto_hold_candidate`, which respects SNR and per-channel
-cooldown). It attaches the request to the `ScanState` and then parks until
-`release_hold()`. `poll_queue` calls `_engage_auto_hold`, which starts a
-recording monitor. `_auto_release_check` decides when to let go (labelled by
-`auto_hold_release_reason`: silence, max hold, no traffic), tears the monitor
-down through the handoff path, and calls `sweeper.release_hold()`. The
+cooldown). It attaches the request to the `ScanState`, blocks until that state
+is queued (a dropped hold would park it forever), and then parks until
+`release_hold()`. `poll_queue` calls `_engage_auto_hold`, which starts the
+recording monitor directly (not through `start_monitor`, which is the user
+path and pre-empts a hold) and remembers the `(monitor, sweeper)` pair in
+`_hold`. Every `poll_queue` tick runs `_auto_release_check`, because the parked
+sweeper sends no states. `auto_hold_release_reason` decides when to let go:
+silence counts from the later of the hold start and the last voice, so a
+channel gets `hold_release_s` of grace before it is dropped as "no traffic".
+Release tears the monitor down through the handoff path, and
+`_monitor_stop_finished` calls `release_hold()` on the remembered sweeper only
+after that monitor has stopped. A user listen detaches the hold's monitor the
+same way, and its callback stops the parked sweeper instead. `Sweeper.start()`
+clears the release event that `stop()` leaves set. The
 headless `scan --autonomous` in `cli.py` reuses the same sweeper and monitor
 pieces without Textual.
