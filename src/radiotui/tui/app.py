@@ -362,6 +362,9 @@ class RadioTuiApp(App):
         self.hf_active = False
         self.auto_hold_freq: float | None = None
         self._auto_hold_started_at = 0.0
+        # The hold's own monitor and the parked sweeper it must release once
+        # that monitor has stopped (ADR 0011).
+        self._hold: tuple[ChannelMonitor, Sweeper] | None = None
         self.settings = settings or Settings()
         self.device = None
         self.is_real = False
@@ -537,6 +540,9 @@ class RadioTuiApp(App):
                 latest = self.queue.get_nowait()
             except queue.Empty:
                 break
+        # Holds are checked every tick: the parked sweeper sends no states.
+        if self.auto_hold_freq is not None and self.monitor is not None:
+            self._auto_release_check()
         if latest is None:
             return
         if latest.error:
@@ -572,8 +578,6 @@ class RadioTuiApp(App):
         self.refresh_status()
         if latest.hold_request is not None:
             self._engage_auto_hold(latest.hold_request)
-        elif self.auto_hold_freq is not None and self.monitor is not None:
-            self._auto_release_check()
 
     def refresh_table(self, channels: list[Channel]) -> None:
         table = self.query_one("#channels", DataTable)
@@ -964,15 +968,17 @@ class RadioTuiApp(App):
         self.start_monitor(channel.center_hz, channel.demod, muted=False, enable_recorder=False)
 
     def _engage_auto_hold(self, req) -> None:
-        if not self.settings.scanner.autonomous or self.monitor is not None:
-            return
         if self.sweeper is None or not self.sweeper.running:
+            return
+        if not self.settings.scanner.autonomous or self.monitor is not None:
+            self.sweeper.release_hold()  # don't leave it parked on a refused hold
             return
         self.auto_hold_freq = req.freq_hz
         self._auto_hold_started_at = time.time()
-        self.start_monitor(
+        self._start_monitor_now(
             req.freq_hz, req.demod, muted=True, enable_recorder=True, pause_sweep=False
         )
+        self._hold = (self.monitor, self.sweeper)
         self.log_line(
             f"[magenta]AUTO[/magenta] holding {req.freq_hz / 1e6:.4f} MHz "
             f"(SNR {req.snr_db:.0f} dB), VOX recording"
@@ -980,30 +986,27 @@ class RadioTuiApp(App):
 
     def _auto_release_check(self) -> None:
         assert self.monitor is not None and self.auto_hold_freq is not None
-        silent_for = self.monitor.recorder.seconds_since_voice()
-        held_for = time.time() - self._auto_hold_started_at
-        if (
-            silent_for >= self.settings.scanner.hold_release_s
-            or held_for >= self.settings.scanner.max_hold_s
-        ):
-            freq = self.auto_hold_freq
-            reason = auto_hold_release_reason(silent_for, self.settings.scanner.hold_release_s)
-            self.log_line(f"[magenta]AUTO[/magenta] releasing {freq / 1e6:.4f} MHz ({reason})")
-            self.stop_monitor(resume_sweep=False)
-            if self.sweeper is not None:
-                self.sweeper.cooldown_channel(freq)
-                self.sweeper.release_hold()
-            self.auto_hold_freq = None
+        reason = auto_hold_release_reason(
+            self.monitor.recorder.seconds_since_voice(),
+            time.time() - self._auto_hold_started_at,
+            self.settings.scanner.hold_release_s,
+            self.settings.scanner.max_hold_s,
+        )
+        if reason is None:
+            return
+        freq = self.auto_hold_freq
+        self.log_line(f"[magenta]AUTO[/magenta] releasing {freq / 1e6:.4f} MHz ({reason})")
+        if self.sweeper is not None:
+            self.sweeper.cooldown_channel(freq)
+        # The sweeper is released by the stop worker's completion callback.
+        self.stop_monitor(resume_sweep=False)
 
     def action_toggle_autonomous(self) -> None:
         scanner = self.settings.scanner
         scanner.autonomous = not scanner.autonomous
-        if not scanner.autonomous:
-            if self.sweeper is not None and self.sweeper.holding_active():
-                if self.monitor is not None and self.auto_hold_freq is not None:
-                    self.stop_monitor(resume_sweep=False)
-                self.sweeper.release_hold()
-            self.auto_hold_freq = None
+        if not scanner.autonomous and self.auto_hold_freq is not None:
+            # A hold not yet engaged is released by _engage_auto_hold.
+            self.stop_monitor(resume_sweep=False)
         self.log_line(
             "[magenta]Autonomous scan-and-hold ON[/magenta]"
             if scanner.autonomous
@@ -1017,21 +1020,17 @@ class RadioTuiApp(App):
         demod: DemodMode,
         muted: bool,
         enable_recorder: bool,
-        pause_sweep: bool = True,
     ) -> None:
-        if self.sweeper is not None and self.sweeper.holding_active():
-            self.sweeper.release_hold()
-            self.auto_hold_freq = None
+        # A user listen pre-empts an auto-hold: its monitor stops first, then
+        # _start_monitor_now stops the parked sweeper.
         old_monitor = self._detach_monitor()
         if old_monitor is not None:
             self._stop_monitor_worker(
                 old_monitor,
-                lambda: self._start_monitor_now(
-                    freq_hz, demod, muted, enable_recorder, pause_sweep
-                ),
+                lambda: self._start_monitor_now(freq_hz, demod, muted, enable_recorder, True),
             )
             return
-        self._start_monitor_now(freq_hz, demod, muted, enable_recorder, pause_sweep)
+        self._start_monitor_now(freq_hz, demod, muted, enable_recorder, True)
 
     def _start_monitor_now(
         self,
@@ -1091,6 +1090,7 @@ class RadioTuiApp(App):
             return None
         self._ignore_rssi = True  # the stopping thread may still post readings
         monitor, self.monitor = self.monitor, None
+        self.auto_hold_freq = None
         self.last_rssi = None
         self._peak_rssi = -120.0
         if not self._shutting_down:
@@ -1105,12 +1105,12 @@ class RadioTuiApp(App):
 
         def finish_stop() -> None:
             monitor.stop()
-            self.call_from_thread(self._monitor_stop_finished, callback)
+            self.call_from_thread(self._monitor_stop_finished, callback, monitor)
 
         self._monitor_stops_pending += 1
         self.run_worker(finish_stop, thread=True, exit_on_error=False)
 
-    def _monitor_stop_finished(self, callback=None) -> None:
+    def _monitor_stop_finished(self, callback=None, monitor=None) -> None:
         self._monitor_stops_pending -= 1
         if self._shutting_down:
             if self._monitor_stops_pending == 0:
@@ -1118,6 +1118,11 @@ class RadioTuiApp(App):
             return
         if callback is not None:
             callback()
+        if self._hold is not None and self._hold[0] is monitor:
+            # Only now has the hold's monitor let go of the tuner. A callback
+            # that took the tuner has already stopped this sweeper.
+            sweeper, self._hold = self._hold[1], None
+            sweeper.release_hold()
 
     def _resume_sweep(self) -> None:
         if self.resume_sweep_after_listen:

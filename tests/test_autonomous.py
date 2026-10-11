@@ -2,13 +2,14 @@
 
 import math
 import queue
+import threading
 import time
 
 import numpy as np
 import pytest
 
 from radiotui.audio.recorder import VoxRecorder
-from radiotui.config import AudioSettings, ScannerSettings
+from radiotui.config import AudioSettings, ScannerSettings, Settings
 from radiotui.core.models import DemodMode, HoldRequest
 from radiotui.dsp.spectrum import SweepPlan
 from radiotui.scanner.monitor import auto_hold_release_reason
@@ -17,7 +18,7 @@ from radiotui.sdr.simulator import SimCarrier, SimulatedDevice
 from radiotui.tui.app import RadioTuiApp
 
 
-def make_sweeper(**overrides):
+def make_sweeper(queue_size=64, **overrides):
     device = SimulatedDevice(
         carriers=[SimCarrier(145.500e6, -18.0, "nfm", duty_cycle=1.0)],
         seed=7,
@@ -34,7 +35,7 @@ def make_sweeper(**overrides):
     for key, value in overrides.items():
         setattr(settings, key, value)
     plan = SweepPlan.build(144.0e6, 147.0e6, settings.sample_rate_hz, settings.fft_size)
-    out: queue.Queue = queue.Queue(maxsize=64)
+    out: queue.Queue = queue.Queue(maxsize=queue_size)
     return Sweeper(device, plan, settings, out), out
 
 
@@ -113,6 +114,36 @@ def test_autonomy_disabled_never_holds():
         sweeper.stop()
 
 
+def test_restart_does_not_inherit_stale_release():
+    """#61: stop() sets the release event; the next hold must still park."""
+    sweeper, out = make_sweeper()
+    sweeper.start()
+    sweeper.stop()
+    sweeper.start()
+    try:
+        held = wait_for_state(out, lambda s: s.hold_request is not None, 20.0)
+        assert held is not None
+        sweeps = sweeper.sweeps_done
+        time.sleep(0.5)
+        assert sweeper.holding_active()
+        assert sweeper.sweeps_done == sweeps
+    finally:
+        sweeper.stop()
+
+
+def test_hold_state_is_not_dropped_on_a_full_queue():
+    """#61: a hold the UI never sees would park the sweeper forever."""
+    sweeper, out = make_sweeper(queue_size=1)
+    out.put(None)  # the UI is behind
+    sweeper.start()
+    try:
+        time.sleep(1.5)
+        held = wait_for_state(out, lambda s: s.hold_request is not None, 10.0)
+        assert held is not None
+    finally:
+        sweeper.stop()
+
+
 def test_recorder_tracks_last_voice_even_when_disabled(tmp_path):
     audio = AudioSettings(recordings_dir=str(tmp_path))
     rec = VoxRecorder(145.5e6, audio)
@@ -138,71 +169,76 @@ MAX_HOLD_S = 120.0
 
 
 @pytest.mark.parametrize(
-    ("silent_for", "expected"),
+    ("silent_for", "held_for", "expected"),
     [
-        (float("inf"), "no traffic"),
-        (30.0, "silence"),
-        (1.5, "max hold"),
+        (float("inf"), 1.0, None),  # #61: grace period before any voice
+        (float("inf"), HOLD_RELEASE_S, "no traffic"),
+        (30.0, 30.0, "silence"),
+        (1.5, 60.0, None),
+        (1.5, MAX_HOLD_S + 1, "max hold"),
     ],
 )
-def test_auto_hold_release_reason_paths(silent_for, expected):
-    assert auto_hold_release_reason(silent_for, HOLD_RELEASE_S) == expected
+def test_auto_hold_release_reason_paths(silent_for, held_for, expected):
+    assert auto_hold_release_reason(silent_for, held_for, HOLD_RELEASE_S, MAX_HOLD_S) == expected
 
 
-async def _hold_log_line(app) -> str:
-    for event in reversed(app._events):
-        if "releasing" in event:
-            return event
-    return ""
+# ---- issue #61: the TUI hold must engage, release and resume on its own ----
 
 
-async def test_auto_hold_release_reports_no_traffic() -> None:
-    """A channel that never produced voice is labeled 'no traffic', not 'max hold'."""
-    app = RadioTuiApp(force_sim=True, start_sweeper=True)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause(0.2)
-        app.settings.scanner.autonomous = True
-        app._engage_auto_hold(HoldRequest(freq_hz=100e6, demod=DemodMode.WFM, snr_db=15))
-        await pilot.pause(0.3)
-        assert app.auto_hold_freq is not None
-        app._pause_sweeper_for_monitor()
-        app._auto_hold_started_at = time.time() - MAX_HOLD_S / 2
-        app.monitor.recorder.last_voice_ts = None  # never any voice
-        app._auto_release_check()
-        await pilot.pause(0.1)
-        assert "no traffic" in await _hold_log_line(app)
-        assert app.auto_hold_freq is None
+def tuner_consumers(app) -> int:
+    """Threads reading the tuner: live monitors, plus the sweeper unless parked."""
+    sweeper = app.sweeper
+    count = 0
+    for thread in threading.enumerate():
+        if thread.name.startswith("monitor-"):
+            count += 1
+        elif thread.name == "sweeper" and not (sweeper is not None and sweeper.holding_active()):
+            count += 1
+    return count
 
 
-async def test_auto_hold_release_reports_max_hold() -> None:
-    """Released while still talking (held past max_hold_s) is labeled 'max hold'."""
-    app = RadioTuiApp(force_sim=True, start_sweeper=True)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause(0.2)
-        app.settings.scanner.autonomous = True
-        app._engage_auto_hold(HoldRequest(freq_hz=100e6, demod=DemodMode.WFM, snr_db=15))
-        await pilot.pause(0.3)
-        assert app.auto_hold_freq is not None
-        app._pause_sweeper_for_monitor()
-        app._auto_hold_started_at = time.time() - (MAX_HOLD_S + 10)
-        app.monitor.recorder.last_voice_ts = time.time()  # voice right now
-        app._auto_release_check()
-        await pilot.pause(0.1)
-        assert "max hold" in await _hold_log_line(app)
+async def test_tui_autonomous_hold_cycles_end_to_end() -> None:
+    settings = Settings(
+        scanner=ScannerSettings(
+            hop_dwell_s=0.02,
+            min_persist_frames=1,
+            hold_release_s=0.5,
+            max_hold_s=1.5,
+            channel_cooldown_s=30.0,
+        )
+    )
+    app = RadioTuiApp(force_sim=True, settings=settings, start_sweeper=True)
+    peak_consumers = 0
+    sampling = True
 
+    def sample() -> None:
+        nonlocal peak_consumers
+        while sampling:
+            peak_consumers = max(peak_consumers, tuner_consumers(app))
+            time.sleep(0.005)
 
-async def test_auto_hold_release_reports_silence() -> None:
-    """Voice that stopped long enough ago is labeled 'silence'."""
-    app = RadioTuiApp(force_sim=True, start_sweeper=True)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause(0.2)
-        app.settings.scanner.autonomous = True
-        app._engage_auto_hold(HoldRequest(freq_hz=100e6, demod=DemodMode.WFM, snr_db=15))
-        await pilot.pause(0.3)
-        assert app.auto_hold_freq is not None
-        app._pause_sweeper_for_monitor()
-        app._auto_hold_started_at = time.time() - 1.0
-        app.monitor.recorder.last_voice_ts = time.time() - (HOLD_RELEASE_S + 10)
-        app._auto_release_check()
-        await pilot.pause(0.1)
-        assert "silence" in await _hold_log_line(app)
+    sampler = threading.Thread(target=sample, daemon=True)
+    sampler.start()
+    try:
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause(0.2)
+            await pilot.press("o")
+            deadline = time.time() + 30.0
+            while time.time() < deadline:
+                await pilot.pause(0.2)
+                log = "\n".join(app._events)
+                if log.count("releasing") >= 2:
+                    break
+            log = "\n".join(app._events)
+            assert log.count("AUTO[/magenta] holding") >= 2, log
+            assert log.count("releasing") >= 2, log
+            # Released holds give the tuner back: the sweeper keeps sweeping.
+            assert app.monitor is None or app.auto_hold_freq is not None
+            sweeps = app.sweeper.sweeps_done
+            await pilot.pause(1.0)
+            assert app.sweeper.sweeps_done > sweeps or app.auto_hold_freq is not None
+            app.sweeper.stop()
+    finally:
+        sampling = False
+        sampler.join()
+    assert peak_consumers <= 1

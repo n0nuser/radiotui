@@ -58,6 +58,7 @@ class Sweeper:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
+        self._release_event.clear()  # stop() sets it to unpark a hold
         self._thread = threading.Thread(target=self._run, name="sweeper", daemon=True)
         self._thread.start()
 
@@ -86,6 +87,16 @@ class Sweeper:
                 continue
             return HoldRequest(freq_hz=ch.center_hz, demod=ch.demod, snr_db=ch.snr_db)
         return None
+
+    def _publish(self, state: ScanState, must_deliver: bool) -> bool:
+        """Queue ``state``; a hold must arrive, so block for it until stopped."""
+        while True:
+            try:
+                self._queue.put(state, block=must_deliver, timeout=0.1)
+                return True
+            except queue.Full:
+                if not must_deliver or self._stop.is_set():
+                    return False
 
     def _run(self) -> None:
         dc_mask_hz = self._plan.sample_rate_hz * 0.03 if self._device.is_real else 0.0
@@ -143,10 +154,11 @@ class Sweeper:
                 elapsed=time.time() - t0,
                 hold_request=hold,
             )
-            try:
-                self._queue.put_nowait(state)
-            except queue.Full:
-                pass
+            if not self._publish(state, hold is not None):
+                # A dropped hold-carrying state would park the sweeper forever.
+                self.hold_request = None
+                self.holding = False
+                continue
             if hold is not None and not self._stop.is_set():
                 self._release_event.wait()
                 self._release_event.clear()
