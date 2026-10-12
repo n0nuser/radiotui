@@ -10,9 +10,9 @@ import time
 
 from textual.widgets import Static
 
-from radiotui.core.models import DemodMode
+from radiotui.core.models import DemodMode, HoldRequest
 from radiotui.scanner.monitor import ChannelMonitor
-from radiotui.scanner.session import Rssi, SessionError, TunerSession
+from radiotui.scanner.session import HoldEngaged, Rssi, SessionError, TunerSession
 from radiotui.sdr.simulator import SimulatedDevice
 from radiotui.tui.app import RadioTuiApp
 from tests.tui_waits import listen_hz, wait_listening, wait_not_listening, wait_until
@@ -167,3 +167,13 @@ async def test_late_status_refresh_after_shutdown_is_harmless() -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.1)
     app.refresh_status()
+
+
+async def test_session_event_after_main_screen_is_gone_is_dropped() -> None:
+    """A hold event can land while shutdown is removing the widgets; it must not crash."""
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        await app.query_one("#main").remove()
+        app.post_message(update(HoldEngaged(HoldRequest(446.05e6, DemodMode.NFM, 20.0))))
+        await pilot.pause(0.2)
