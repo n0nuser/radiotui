@@ -181,6 +181,48 @@ def audio_lowpass(
     return out
 
 
+#: NFM voice starts at 300 Hz; CTCSS tops out at 254.1 Hz (ADR 0015).
+SUBAUDIBLE_STOP_HZ = 254.1
+VOICE_LOW_HZ = 300.0
+
+
+@lru_cache(maxsize=4)
+def subaudible_taps(fs: float) -> np.ndarray:
+    """Linear-phase high-pass with its transition between the two edges.
+
+    A Hamming window needs ~3.3/width taps; 40 Hz instead of the full 46 Hz
+    gap leaves margin, which is ~2,500 taps at the 30 kS/s NFM rate.
+    """
+    ntaps = int(3.3 * fs / 40.0) | 1
+    cutoff = (SUBAUDIBLE_STOP_HZ + VOICE_LOW_HZ) / 2 / fs
+    n = np.arange(ntaps) - (ntaps - 1) / 2
+    lowpass = 2 * cutoff * np.sinc(2 * cutoff * n) * np.hamming(ntaps)
+    highpass = -lowpass / lowpass.sum()
+    highpass[(ntaps - 1) // 2] += 1.0
+    return highpass
+
+
+def subaudible_highpass(
+    audio: np.ndarray, fs: float, state: DemodState | None = None
+) -> np.ndarray:
+    """Remove CTCSS tones and DCS from NFM audio (ADR 0015).
+
+    Direct convolution, ~0.4 ms per 64 ms block; ADR 0015 moves it to FFT
+    overlap-save only if that ever exceeds ~5 ms.
+    """
+    if len(audio) == 0:
+        return audio
+    taps = subaudible_taps(fs)
+    history = None if state is None else state.subaudible_history
+    if history is None or len(history) != len(taps) - 1:
+        history = np.zeros(len(taps) - 1)
+    padded = np.concatenate([history, audio])
+    out = np.convolve(padded, taps, mode="valid")
+    if state is not None:
+        state.subaudible_history = padded[-(len(taps) - 1) :]
+    return out
+
+
 def demod_wfm(
     iq: np.ndarray,
     fs: float,
@@ -258,6 +300,7 @@ class DemodState:
     resample_input_samples: int = 0
     resample_output_samples: int = 0
     audio_lpf_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    subaudible_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
 
 def channel_decimation(fs: float, channel_bw_hz: float, mode: DemodMode) -> int:
@@ -298,7 +341,10 @@ def channel_audio(
     elif mode is DemodMode.AM:
         audio = demod_am(low, chan_fs, state=state)
     else:
-        audio = demod_nfm(low, chan_fs, state=state)
+        # The unfiltered discriminator output is the tone detector's input
+        # (ADR 0017); only what is heard and recorded loses the tones.
+        discriminator = demod_nfm(low, chan_fs, state=state)
+        audio = subaudible_highpass(discriminator, chan_fs, state)
     if len(audio) < 8:
         return np.zeros(output_rate_hz // 10, dtype=np.float32)
     ratio = output_rate_hz / chan_fs
