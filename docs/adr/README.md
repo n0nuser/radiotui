@@ -21,6 +21,7 @@ Numbered in the order the decision was made. Status is `Accepted` unless noted.
 | [0015](0015-nfm-subaudible-highpass.md) | NFM sub-audible high-pass as a long linear-phase FIR (Proposed) | 2026-10-12 |
 | [0016](0016-ssb-and-cw-modes.md) | SSB and CW by shift, complex low-pass and real part (Proposed) | 2026-10-12 |
 | [0017](0017-ctcss-dcs-tone-squelch.md) | CTCSS/DCS detection and a tone squelch (Proposed) | 2026-10-12 |
+| [0018](0018-nfm-noise-squelch.md) | NFM noise squelch on discriminator noise above the voice band (Proposed) | 2026-10-12 |
 
 Studies and alternatives investigated during these decisions live in
 [`../research/`](../research/) and [`../reasoning_logs/`](../reasoning_logs/).
