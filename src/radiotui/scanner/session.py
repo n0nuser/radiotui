@@ -123,6 +123,8 @@ SessionEvent = (
 class SessionStatus:
     #: The sweeper thread is alive (sweeping, or parked by a hold).
     sweeping: bool
+    #: Parked waiting for a hold to end: alive, but not reading the tuner.
+    sweep_parked: bool
     sweeps_done: int
     hops_done: int
     hop_total: int
@@ -329,6 +331,7 @@ class TunerSession:
         sweeper, monitor, hold = self._sweeper, self._monitor, self._hold
         return SessionStatus(
             sweeping=sweeper is not None and sweeper.running,
+            sweep_parked=sweeper is not None and sweeper.holding_active(),
             sweeps_done=sweeper.sweeps_done if sweeper is not None else 0,
             hops_done=sweeper.hops_done if sweeper is not None else 0,
             hop_total=sweeper.hop_total if sweeper is not None else 0,
