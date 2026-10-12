@@ -98,6 +98,9 @@ class ScannerSettings:
     #: RF gate for recording: blocks below this are treated as silence
     #: (None disables the gate). Raw tuner RSSI includes some LO-leak offset.
     squelch_rssi_dbfs: float | None = None
+    #: NFM noise squelch (ADR 0018): open once a carrier has quietened the
+    #: discriminator noise above the voice band by this many dB (None = off).
+    noise_squelch_db: float | None = None
     region: str = "r1"
 
 

@@ -223,6 +223,47 @@ def subaudible_highpass(
     return out
 
 
+#: Discriminator noise above the voice band; a captured carrier quietens it
+#: (ADR 0018). Exists at the ~30 kS/s NFM channel rate.
+NOISE_BAND_HZ = (5_000.0, 10_000.0)
+#: Per-block weight of the IQ DC estimate, about a second at 64 ms blocks.
+IQ_DC_ALPHA = 0.06
+
+
+def _noise_band_density(iq: np.ndarray, fs: float) -> float:
+    phase = np.angle(iq[1:] * np.conj(iq[:-1]))
+    window = np.hanning(len(phase))
+    spec = np.abs(np.fft.rfft(phase * window)) ** 2 / (fs * np.sum(window**2))
+    freqs = np.fft.rfftfreq(len(phase), 1.0 / fs)
+    lo, hi = NOISE_BAND_HZ
+    return float(np.mean(spec[(freqs >= lo) & (freqs <= hi)]))
+
+
+@lru_cache(maxsize=8)
+def _unquieted_density(fs: float) -> float:
+    """The reading with no carrier at all: complex white noise, any level."""
+    rng = np.random.default_rng(0)
+    iq = rng.normal(size=16_384) + 1j * rng.normal(size=16_384)
+    return _noise_band_density(iq, fs)
+
+
+def noise_quieting_db(iq: np.ndarray, fs: float, state: DemodState | None = None) -> float:
+    """How far a carrier has quietened the discriminator noise, in dB (<= 0).
+
+    The tuner's DC spike sits in the channel and would look like a carrier,
+    so a slow IQ mean is removed first. Only this measurement sees the
+    correction; the audio is demodulated from the raw channel.
+    """
+    mean = complex(np.mean(iq))
+    if state is None:
+        dc = mean
+    else:
+        dc = mean if state.iq_dc is None else state.iq_dc + IQ_DC_ALPHA * (mean - state.iq_dc)
+        state.iq_dc = dc
+    density = _noise_band_density(iq - dc, fs)
+    return 10.0 * np.log10(density / _unquieted_density(fs) + 1e-12)
+
+
 def demod_wfm(
     iq: np.ndarray,
     fs: float,
@@ -381,6 +422,8 @@ class DemodState:
     subaudible_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
     mix_phase: float = 0.0
     sideband_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    iq_dc: complex | None = None
+    noise_quieting_db: float = 0.0
 
 
 def channel_decimation(fs: float, channel_bw_hz: float, mode: DemodMode) -> int:
@@ -426,6 +469,8 @@ def channel_audio(
     else:
         # The unfiltered discriminator output is the tone detector's input
         # (ADR 0017); only what is heard and recorded loses the tones.
+        if state is not None and len(low) >= 64:
+            state.noise_quieting_db = noise_quieting_db(low, chan_fs, state)
         discriminator = demod_nfm(low, chan_fs, state=state)
         audio = subaudible_highpass(discriminator, chan_fs, state)
     if len(audio) < 8:
