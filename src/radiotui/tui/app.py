@@ -724,7 +724,12 @@ class RadioTuiApp(App):
         return None
 
     def refresh_status(self) -> None:
-        meter = self.query_one("#meter", Static)
+        try:
+            meter = self.query_one("#meter", Static)
+        except NoMatches:
+            # A late RSSI or clip message can land after shutdown removed the
+            # main screen; there is nothing left to paint.
+            return
         parts = [f"band {self.band_label}"]
         if self.sweeper is not None and self.sweeper.running:
             parts.append(

@@ -160,3 +160,11 @@ async def test_quit_teardown_is_bounded_when_monitor_stop_hangs(monkeypatch) -> 
     release.set()
     assert app.wait_for_teardown(timeout_s=6.0)
     assert app.device is None
+
+
+async def test_late_status_refresh_after_shutdown_is_harmless() -> None:
+    """RSSI and clip messages can arrive after the main screen is gone."""
+    app = RadioTuiApp(force_sim=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.1)
+    app.refresh_status()
