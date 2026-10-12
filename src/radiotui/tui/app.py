@@ -571,6 +571,12 @@ class RadioTuiApp(App):
 
     @on(SessionUpdate)
     def on_session_update(self, message: RadioTuiApp.SessionUpdate) -> None:
+        try:
+            self.query_one("#main")
+        except NoMatches:
+            # The session thread can still post while shutdown removes the
+            # widgets; there is nothing left to log to or paint.
+            return
         event = message.event
         match event:
             case ScanUpdate(state):
