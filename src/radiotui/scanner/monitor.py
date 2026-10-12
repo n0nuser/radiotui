@@ -49,6 +49,30 @@ def auto_hold_release_reason(
     return None
 
 
+class NoiseSquelch:
+    """Open/close decision on the noise-quieting reading (ADR 0018).
+
+    Opens at the threshold, closes only once the reading is back above it by
+    the hysteresis and the hang has run out, so syllable gaps don't chop.
+    """
+
+    HYSTERESIS_DB = 3.0
+    HANG_S = 0.3
+
+    def __init__(self) -> None:
+        self.is_open = False
+        self._hang_s = 0.0
+
+    def update(self, quieting_db: float, threshold_db: float, block_s: float) -> bool:
+        if quieting_db <= threshold_db:
+            self.is_open = True
+            self._hang_s = self.HANG_S
+        elif self.is_open and quieting_db > threshold_db + self.HYSTERESIS_DB:
+            self._hang_s -= block_s
+            self.is_open = self._hang_s > 0
+        return self.is_open
+
+
 @dataclass(frozen=True)
 class MonitorStatus:
     running: bool
@@ -100,6 +124,7 @@ class ChannelMonitor:
         self._on_rssi = on_rssi
         self._on_error = on_error
         self._demod_state = DemodState()
+        self._noise_squelch = NoiseSquelch()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._reader: threading.Thread | None = None
@@ -257,6 +282,16 @@ class ChannelMonitor:
         gain = 10.0 ** (self._settings.audio.volume_db / 20.0)
         return scale_pcm16(pcm, gain)
 
+    def _squelch_open(self, block_s: float) -> bool:
+        """Noise squelch ANDed with the RF gate; always open when it is off."""
+        scanner = self._settings.scanner
+        if scanner.noise_squelch_db is None or self._demod is not DemodMode.NFM:
+            return True
+        quieting = self._demod_state.noise_quieting_db
+        is_open = self._noise_squelch.update(quieting, -scanner.noise_squelch_db, block_s)
+        rf_gate = scanner.squelch_rssi_dbfs
+        return is_open and (rf_gate is None or self.rssi_dbfs >= rf_gate)
+
     def _read_loop(self) -> None:
         """Keep the device drained; never do arithmetic on this thread."""
         block = self._settings.audio.block_size
@@ -329,8 +364,10 @@ class ChannelMonitor:
             )
             if len(audio):
                 pcm = audio_to_pcm16(audio)
+                squelch_open = self._squelch_open(len(audio) / rate)
                 if not self.muted:
-                    self._player.write(self._playback_pcm(pcm))
-                self._recorder.feed(pcm, rate, rssi_dbfs=self.rssi_dbfs)
+                    # Silence, not nothing: the player must stay fed.
+                    self._player.write(self._playback_pcm(pcm) if squelch_open else bytes(len(pcm)))
+                self._recorder.feed(pcm, rate, rssi_dbfs=self.rssi_dbfs, squelch_open=squelch_open)
             # No pacing here: the reader thread is already paced by the device,
             # and sleeping would only add to the deficit this split removes.

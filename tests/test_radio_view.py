@@ -112,6 +112,14 @@ async def test_settings_menu_edits_threshold_and_squelch():
         await pilot.press("left")
         await pilot.pause(0.1)
         assert scanner.squelch_rssi_dbfs is None
+        # the noise squelch row sits right under it (ADR 0018)
+        await pilot.press("down")
+        await pilot.press("right")
+        await pilot.pause(0.1)
+        assert scanner.noise_squelch_db == 3.0
+        await pilot.press("left")
+        await pilot.pause(0.1)
+        assert scanner.noise_squelch_db is None
         await pilot.press("escape")
         await pilot.pause(0.2)
         assert not isinstance(app.screen, SettingsModal)
