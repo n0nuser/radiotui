@@ -199,6 +199,9 @@ class ChannelMonitor:
         hands the tuner to a second reader (ADR 0004). Call again to retry.
         """
         self._stop.set()
+        # First, so a write blocked on a stalled audio backend is released
+        # and the monitor thread can reach its stop check.
+        self._player.stop()
         threads = [t for t in (self._reader, self._thread) if t is not None]
         for thread in threads:
             thread.join(timeout=self.STOP_TIMEOUT_S)
@@ -207,7 +210,6 @@ class ChannelMonitor:
         self._reader = None
         self._thread = None
         self._recorder.stop()
-        self._player.stop()
         return True
 
     def set_muted(self, muted: bool) -> None:

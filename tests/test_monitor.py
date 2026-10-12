@@ -176,3 +176,30 @@ def test_status_reports_backend_and_recording(muted):
     assert status.backend == "stub"
     assert status.recording
     assert not status.running
+
+
+def test_stop_unblocks_a_write_to_a_stalled_audio_backend(monkeypatch):
+    """A backend that stops reading must not keep the monitor from stopping."""
+    writing = threading.Event()
+    released = threading.Event()
+
+    class StalledPlayer:
+        backend = "stalled"
+        running = True
+
+        def start(self) -> bool:
+            return True
+
+        def write(self, pcm: bytes) -> None:
+            writing.set()
+            released.wait()  # the pipe is full and nobody drains it
+
+        def stop(self) -> None:
+            released.set()  # what killing the backend does to a blocked write
+
+    monkeypatch.setattr(ChannelMonitor, "STOP_TIMEOUT_S", 0.5)
+    monitor, _ = make_monitor(player=StalledPlayer())
+    monitor.set_muted(False)
+    monitor.start()
+    assert writing.wait(5.0)
+    assert monitor.stop()

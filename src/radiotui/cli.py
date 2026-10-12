@@ -357,7 +357,7 @@ def cmd_scan(args) -> None:
         if args.export and sweeper.channels:
             path = _export_sweep(sweeper.channels, args.export, band, settings, sweeper)
             console.print(f"[green]Exported {len(sweeper.channels)} channel(s) to {path}[/green]")
-        sweeper.stop()
+        _stop_reader(sweeper)
         device.close()
     console.print("[dim]Scan stopped.[/dim]")
 
@@ -375,6 +375,19 @@ def _export_sweep(channels, path_str: str, band: Band, settings, sweeper) -> Pat
         "sweeps_completed": sweeper.sweeps_done,
     }
     return export_channels(channels, path_str, context=context)
+
+
+def _stop_reader(reader: ChannelMonitor | Sweeper) -> None:
+    """Wait until the reader's threads are gone before the tuner is reused.
+
+    Releasing a hold or closing the device under a wedged read would put two
+    readers on the tuner (ADR 0004); headless, there is no UI to keep alive.
+    """
+    if reader.stop():
+        return
+    console.print("[yellow]Waiting for the device read to return...[/yellow]")
+    while not reader.stop():
+        pass  # each attempt already waits STOP_TIMEOUT_S
 
 
 def _print_clip(clip: ClipInfo) -> None:
@@ -428,7 +441,7 @@ def _headless_auto_hold(
         if release is not None:
             reason = release
             break
-    monitor.stop()  # closes any open clip before the list is read
+    _stop_reader(monitor)  # closes any open clip before the list is read
     clips = monitor.clips
     if not clips:
         console.print(f"[dim]AUTO hold ended ({reason}) without transmissions.[/dim]")
@@ -503,7 +516,7 @@ def cmd_listen(args) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        monitor.stop()
+        _stop_reader(monitor)
         device.close()
     console.print("[dim]Stopped.[/dim]")
 
@@ -525,7 +538,7 @@ def cmd_record(args) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        monitor.stop()  # closes any open clip before the list is read
+        _stop_reader(monitor)  # closes any open clip before the list is read
         device.close()
     if not monitor.clips:
         console.print("[yellow]No transmissions captured.[/yellow]")
@@ -566,7 +579,7 @@ def cmd_tuner(args) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        monitor.stop()
+        _stop_reader(monitor)
         device.close()
 
 

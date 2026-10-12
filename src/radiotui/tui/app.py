@@ -558,6 +558,8 @@ class RadioTuiApp(App):
             monitor = self._detach_monitor()
             self._stop_monitor_worker(monitor, lambda: self._start_sweep(band, name))
             return
+        if not self._stop_sweeper():
+            return
         self.band_name = name or "custom"
         self.band_label = band.label
         self._channel_bw_hz = band.channel_bw_hz
@@ -565,8 +567,6 @@ class RadioTuiApp(App):
             self.cursor_hz is None or not (self.plan.start_hz <= self.cursor_hz <= self.plan.end_hz)
         ):
             self.cursor_hz = (band.start_hz + band.end_hz) / 2
-        if not self._stop_sweeper():
-            return
         hf = enable_hf(band_needs_hf(band), self.settings.scanner)
         self.hf_active = False
         if self.device.is_real:
@@ -830,9 +830,9 @@ class RadioTuiApp(App):
 
     def _pause_sweeper_for_monitor(self) -> bool:
         if self.sweeper is not None and self.sweeper.running:
-            self.resume_sweep_after_listen = True
             if not self._stop_sweeper():
                 return False
+            self.resume_sweep_after_listen = True
             time.sleep(0.05)
         return True
 
