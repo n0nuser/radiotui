@@ -113,20 +113,42 @@ class VoxRecorder:
             self._rssi_values.append(rssi_dbfs)
         if not self.enabled:
             return
-        if voiced:
-            if self._file is None:
-                self._open_clip()
-            self._write(pcm)
-            self._hang_remaining_ms = self._settings.vox_hang_ms
-        elif self._file is not None:
-            self._hang_remaining_ms -= block_ms
-            if self._hang_remaining_ms <= 0:
-                self._close_clip()
-            else:
+        try:
+            if voiced:
+                if self._file is None:
+                    self._open_clip()
                 self._write(pcm)
+                self._hang_remaining_ms = self._settings.vox_hang_ms
+            elif self._file is not None:
+                self._hang_remaining_ms -= block_ms
+                if self._hang_remaining_ms <= 0:
+                    self._close_clip()
+                else:
+                    self._write(pcm)
+        except OSError as exc:
+            self._abandon_clip(exc)
+
+    def _abandon_clip(self, exc: OSError) -> None:
+        """Disk full or unwritable directory: stop recording, keep listening.
+
+        Retrying every block would flood the user with one error per block;
+        recording stays off until the user turns it back on.
+        """
+        self.enabled = False
+        file, self._file, self._path = self._file, None, None
+        if file is not None:
+            try:
+                file.close()
+            except OSError:
+                pass  # the original error below is the one worth reporting
+        if self.on_error:
+            self.on_error(f"recording stopped: {exc}")
 
     def stop(self) -> list[ClipInfo]:
-        self._close_clip()
+        try:
+            self._close_clip()
+        except OSError as exc:
+            self._abandon_clip(exc)
         return self.clips
 
     def _open_clip(self) -> None:

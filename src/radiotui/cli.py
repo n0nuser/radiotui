@@ -16,6 +16,7 @@ from rich.table import Table
 from rich.text import Text
 
 from radiotui.antenna.advisor import analyze, format_report
+from radiotui.audio.recorder import ClipInfo
 from radiotui.channels_file import load_user_channels
 from radiotui.config import (
     BANDS,
@@ -356,7 +357,7 @@ def cmd_scan(args) -> None:
         if args.export and sweeper.channels:
             path = _export_sweep(sweeper.channels, args.export, band, settings, sweeper)
             console.print(f"[green]Exported {len(sweeper.channels)} channel(s) to {path}[/green]")
-        sweeper.stop()
+        _stop_reader(sweeper)
         device.close()
     console.print("[dim]Scan stopped.[/dim]")
 
@@ -374,6 +375,27 @@ def _export_sweep(channels, path_str: str, band: Band, settings, sweeper) -> Pat
         "sweeps_completed": sweeper.sweeps_done,
     }
     return export_channels(channels, path_str, context=context)
+
+
+def _stop_reader(reader: ChannelMonitor | Sweeper) -> None:
+    """Wait until the reader's threads are gone before the tuner is reused.
+
+    Releasing a hold or closing the device under a wedged read would put two
+    readers on the tuner (ADR 0004); headless, there is no UI to keep alive.
+    """
+    if reader.stop():
+        return
+    console.print("[yellow]Waiting for the device read to return...[/yellow]")
+    while not reader.stop():
+        pass  # each attempt already waits STOP_TIMEOUT_S
+
+
+def _print_clip(clip: ClipInfo) -> None:
+    console.print(f"[green]clip saved[/green] {clip.path.name} ({clip.seconds:.1f}s)")
+
+
+def _print_monitor_error(message: str) -> None:
+    console.print(f"[red]{escape(message)}[/red]")
 
 
 def _headless_auto_hold(
@@ -396,12 +418,11 @@ def _headless_auto_hold(
         req.demod,
         settings,
         muted=True,
+        record=True,
         band_label=band_label,
         channel_bw_hz=channel_bw_hz,
-    )
-    monitor.recorder.enabled = True
-    monitor.recorder.on_clip_end = lambda clip: console.print(
-        f"[green]clip saved[/green] {clip.path.name} ({clip.seconds:.1f}s)"
+        on_clip=_print_clip,
+        on_error=_print_monitor_error,
     )
     monitor.start()
     t_hold = time.time()
@@ -410,7 +431,7 @@ def _headless_auto_hold(
         time.sleep(0.2)
         held_for = time.time() - t_hold
         release = auto_hold_release_reason(
-            monitor.recorder.seconds_since_voice(),
+            monitor.silent_for(),
             held_for,
             settings.scanner.hold_release_s,
             settings.scanner.max_hold_s,
@@ -420,8 +441,8 @@ def _headless_auto_hold(
         if release is not None:
             reason = release
             break
-    clips = monitor.recorder.stop()
-    monitor.stop()
+    _stop_reader(monitor)  # closes any open clip before the list is read
+    clips = monitor.clips
     if not clips:
         console.print(f"[dim]AUTO hold ended ({reason}) without transmissions.[/dim]")
     else:
@@ -458,24 +479,29 @@ def render_scan(state, simulated: bool = False) -> Table:
     return table
 
 
-def run_monitor(args, freq: float):
+def run_monitor(args, freq: float, *, muted: bool, record: bool):
     settings = args._settings  # main() always provides the merged settings
     demod = DemodMode(args.demod) if args.demod else guess_demod(freq)
     device = open_device_or_exit(args.sim)
     apply_hw_options(device, args)
     if enable_hf(freq_needs_hf(freq), settings.scanner):
         announce_hf(device)
-    monitor = ChannelMonitor(device, freq, demod, settings, muted=False)
-    monitor.recorder.on_clip_end = lambda clip: console.print(
-        f"[green]clip saved[/green] {clip.path.name} ({clip.seconds:.1f}s)"
+    monitor = ChannelMonitor(
+        device,
+        freq,
+        demod,
+        settings,
+        muted=muted,
+        record=record,
+        on_clip=_print_clip,
+        on_error=_print_monitor_error,
     )
     return device, monitor
 
 
 def cmd_listen(args) -> None:
-    device, monitor = run_monitor(args, args.freq)
+    device, monitor = run_monitor(args, args.freq, muted=False, record=args.record)
     mode = monitor.demod.value
-    monitor.recorder.enabled = args.record
     record_note = " Recording active clips." if args.record else ""
     console.print(
         f"Listening [bold]{args.freq / 1e6:.4f} MHz[/bold] ({mode}). Ctrl+C to stop." + record_note
@@ -490,16 +516,14 @@ def cmd_listen(args) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        monitor.stop()
+        _stop_reader(monitor)
         device.close()
     console.print("[dim]Stopped.[/dim]")
 
 
 def cmd_record(args) -> None:
-    device, monitor = run_monitor(args, args.freq)
-    monitor.set_muted(True)
-    monitor.recorder.enabled = True
-    clips_dir = monitor.recorder.directory
+    device, monitor = run_monitor(args, args.freq, muted=True, record=True)
+    clips_dir = monitor.recordings_dir
     console.print(
         f"Recording [bold]{args.freq / 1e6:.4f} MHz[/bold] ({monitor.demod.value}) "
         f"to {clips_dir}/ - Ctrl+C to stop."
@@ -514,10 +538,9 @@ def cmd_record(args) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        clips = monitor.recorder.stop()
-        monitor.stop()
+        _stop_reader(monitor)  # closes any open clip before the list is read
         device.close()
-    if not clips:
+    if not monitor.clips:
         console.print("[yellow]No transmissions captured.[/yellow]")
 
 
@@ -530,13 +553,20 @@ def cmd_tuner(args) -> None:
     settings = args._settings  # main() always provides the merged settings
     demod = DemodMode(args.demod) if args.demod else guess_demod(args.freq)
     device = open_device_or_exit(args.sim)
-    monitor = ChannelMonitor(device, args.freq, demod, settings, muted=True)
     peak_hold = {"db": -120.0}
 
     def on_rssi(db: float) -> None:
         peak_hold["db"] = decay_peak_db(peak_hold["db"], db)
 
-    monitor.on_rssi = on_rssi
+    monitor = ChannelMonitor(
+        device,
+        args.freq,
+        demod,
+        settings,
+        muted=True,
+        on_rssi=on_rssi,
+        on_error=_print_monitor_error,
+    )
     console.print(
         f"Tuner on {args.freq / 1e6:.4f} MHz ({demod.value}) - move the antenna! Ctrl+C to exit."
     )
@@ -549,7 +579,7 @@ def cmd_tuner(args) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        monitor.stop()
+        _stop_reader(monitor)
         device.close()
 
 

@@ -12,6 +12,10 @@ class AudioPlayer:
         self.rate_hz = rate_hz
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
+        # Writes in flight. A write can block on a full pipe, so it runs
+        # outside the lock; stop() reads this to know whether it must kill
+        # the backend to unblock that write instead of draining it.
+        self._writers = 0
         self.backend: str | None = None
 
     def start(self) -> bool:
@@ -84,26 +88,36 @@ class AudioPlayer:
 
     def write(self, pcm: bytes) -> None:
         with self._lock:
-            if self._proc is None or self._proc.poll() is not None:
+            proc = self._proc
+            if proc is None or proc.poll() is not None or proc.stdin is None:
                 return
-            try:
-                assert self._proc.stdin is not None
-                self._proc.stdin.write(pcm)
-                self._proc.stdin.flush()
-            except (BrokenPipeError, OSError):
-                pass
+            self._writers += 1
+        try:
+            proc.stdin.write(pcm)
+            proc.stdin.flush()
+        except (OSError, ValueError):
+            pass  # the backend died or stop() closed the pipe: drop the audio
+        finally:
+            with self._lock:
+                self._writers -= 1
 
     def stop(self) -> None:
         with self._lock:
             proc, self._proc = self._proc, None
-        if proc is not None:
-            try:
-                if proc.stdin is not None:
-                    proc.stdin.close()
-                proc.wait(timeout=2.0)
-            except (OSError, subprocess.SubprocessError):
-                proc.kill()
-                proc.wait()  # reap it, or it lingers as a zombie
+            writing = self._writers > 0
+        if proc is None:
+            return
+        if writing:
+            # A write is (or may be) blocked on a full pipe, and closing stdin
+            # would wait behind it; killing the reader turns it into EPIPE.
+            proc.kill()
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+            proc.wait(timeout=2.0)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            proc.kill()
+            proc.wait()  # reap it, or it lingers as a zombie
 
     @property
     def running(self) -> bool:
