@@ -55,6 +55,13 @@ async with app.run_test(size=(140, 40)) as pilot:
 
 Pytest and Textual both capture output, which hides where a test is stuck.
 
+On CI, a test that runs for more than 120 s (`faulthandler_timeout` in
+`pyproject.toml`) dumps the stack of every thread into the job log, and
+`-v` names the test. Look for `Timeout (0:02:00)!`: the thread stuck in
+`_read_loop`, `_run` or the session loop shows where the deadlock is. A job
+is killed after 15 minutes, and `--durations=15` lists the slowest tests, so
+slow waits are visible before they become hangs.
+
 - Run with `-s` so `faulthandler.dump_traceback_later` output on fd 2 is
   visible.
 - Inside a running Textual app, stdout is captured, so log with
