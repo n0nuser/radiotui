@@ -61,25 +61,25 @@ class StubPlayer:
         return self._alive
 
 
-def make_monitor(muted: bool = False) -> ChannelMonitor:
+def make_monitor(player, on_error=None) -> ChannelMonitor:
     device = SimulatedDevice(carriers=[])
-    return ChannelMonitor(device, 145.5e6, DemodMode.NFM, Settings(), muted=muted)
+    return ChannelMonitor(
+        device, 145.5e6, DemodMode.NFM, Settings(), player=player, on_error=on_error
+    )
 
 
 def test_mute_cycles_do_not_respawn_player():
-    monitor = make_monitor()
-    monitor.player = StubPlayer()
+    player = StubPlayer()
+    monitor = make_monitor(player)
     for muted in (True, False, True, False, True):
         monitor.set_muted(muted)
-    assert monitor.player.starts == 1
-    assert monitor.player.stops == 0
+    assert player.starts == 1
+    assert player.stops == 0
 
 
 def test_missing_backend_surfaces_error():
-    monitor = make_monitor()
-    monitor.player = StubPlayer(ok=False)
     errors: list[str] = []
-    monitor.on_error = errors.append
+    monitor = make_monitor(StubPlayer(ok=False), on_error=errors.append)
     monitor.start()
     try:
         assert errors

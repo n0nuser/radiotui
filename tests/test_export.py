@@ -97,12 +97,10 @@ async def test_tui_e_key_exports_and_logs(tmp_path):
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        app.sweeper.stop()  # keep the detector from pruning the seeded channel
-        await pilot.pause(0.1)
         app.settings.audio.recordings_dir = str(tmp_path)
         channel = make_channel(96.9e6)
-        channel.active = True  # only active channels surface in sweeper.channels
-        app.sweeper._tracker.channels[96_900_000.0] = channel
+        channel.active = True
+        app.refresh_table([channel])  # what the table shows is what gets exported
         await pilot.press("e")
         await pilot.pause(0.3)
         files = list(tmp_path.glob("radiotui-*.csv"))
