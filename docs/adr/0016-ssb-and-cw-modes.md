@@ -46,9 +46,18 @@ and once listening starts the demod mode cannot be changed.
 - CLI `--demod` and the tune-entry suffix take their choices from `DemodMode`,
   so the new modes need no changes there.
 
+- A clarifier fixes the pitch without retuning. Two keys step an offset
+  (±10 Hz, limited to ±2.5 kHz) that is added to the phase-continuous shift.
+  The offset reaches the monitor through the session, in the same way as
+  volume and mute. Retuning would restart the monitor and leave a gap in the
+  audio at every step. A new listen resets the offset.
+
 ## Consequences
 
 The ham HF bands become listenable. The carrier mapping assumes the voice sits
-in the middle of the passband, so the pitch can be off by a few hundred Hz.
-Fine-tuning while listening is not part of this decision. Changing the mode
-restarts the monitor, which leaves a short gap in the audio.
+in the middle of the passband, so the pitch starts up to a few hundred Hz off
+until the clarifier corrects it. Changing the mode restarts the monitor, which
+leaves a short gap in the audio.
+The tracker merges peaks within its fixed 25 kHz window (ADR 0005), so SSB
+stations 3 kHz apart on 80m and 40m become one channel. Fixing that reopens
+ADR 0005 and is not part of this decision.
