@@ -145,3 +145,33 @@ def test_streaming_channel_audio_preserves_sample_count():
     ]
     whole = channel_audio(iq, FS, DemodMode.NFM, 48_000, channel_bw_hz=12_500.0)
     assert sum(len(block) for block in blocks) == len(whole)
+
+
+def tone_level(audio: np.ndarray, freq_hz: float, fs: float) -> float:
+    """Amplitude of one sinusoid in ``audio`` by quadrature projection."""
+    t = np.arange(len(audio)) / fs
+    return 2 * abs(np.mean(audio * np.exp(-2j * np.pi * freq_hz * t)))
+
+
+@pytest.mark.parametrize("subtone_hz", [67.0, 100.0, 254.1])
+def test_nfm_audio_drops_subaudible_tones(subtone_hz):
+    """Issue #84: CTCSS rides at ~15 % deviation; after the chain it is 40 dB under voice."""
+    seconds = 1.5
+    t = np.arange(int(FS * seconds)) / FS
+    modulation = 2_500.0 * np.sin(2 * np.pi * 1_000 * t) + 750.0 * np.sin(
+        2 * np.pi * subtone_hz * t
+    )
+    iq = np.exp(2j * np.pi * np.cumsum(modulation) / FS)
+    state = DemodState()
+    block = 65_536
+    audio = np.concatenate(
+        [
+            channel_audio(iq[i : i + block], FS, DemodMode.NFM, state=state)
+            for i in range(0, len(iq), block)
+        ]
+    )
+    settled = audio[48_000 // 2 :]  # past the filter transients
+    ratio_db = 20 * np.log10(
+        tone_level(settled, subtone_hz, 48_000) / tone_level(settled, 1_000, 48_000)
+    )
+    assert ratio_db <= 20 * np.log10(750 / 2_500) - 40.0
