@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [0014](0014-tuner-session-owns-handoffs.md)
 
 ## Decision
 
