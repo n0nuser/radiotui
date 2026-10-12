@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from radiotui.audio.tones import tone_near
 from radiotui.core.files import write_text_atomic
 from radiotui.core.models import Channel
 
@@ -21,6 +22,7 @@ _CSV_FIELDS = (
     "hits",
     "first_seen",
     "last_seen",
+    "tone",
 )
 
 
@@ -38,6 +40,7 @@ def export_channels(
     channels: list[Channel],
     path: Path | str,
     context: dict | None = None,
+    tones: dict[float, str] | None = None,
 ) -> Path:
     """Write ``channels`` to ``path`` (.json -> JSON, anything else -> CSV)."""
     path = Path(path)
@@ -46,7 +49,7 @@ def export_channels(
         payload = {
             "exported_at": iso_ts(datetime.now().timestamp()),
             "context": context or {},
-            "channels": [_channel_dict(ch) for ch in ordered],
+            "channels": [_channel_dict(ch, tones) for ch in ordered],
         }
         text = json.dumps(payload, indent=2)
     else:
@@ -54,7 +57,7 @@ def export_channels(
         writer = csv.DictWriter(buffer, fieldnames=_CSV_FIELDS)
         writer.writeheader()
         for ch in ordered:
-            row = _channel_dict(ch)
+            row = _channel_dict(ch, tones)
             writer.writerow({k: row[k] for k in _CSV_FIELDS})
         text = buffer.getvalue()
     # Headless scans re-export to the same path every 30 s.
@@ -62,7 +65,7 @@ def export_channels(
     return path
 
 
-def _channel_dict(channel: Channel) -> dict:
+def _channel_dict(channel: Channel, tones: dict[float, str] | None = None) -> dict:
     return {
         "center_hz": float(channel.center_hz),
         "name": channel.name,
@@ -73,4 +76,5 @@ def _channel_dict(channel: Channel) -> dict:
         "hits": int(channel.hits),
         "first_seen": iso_ts(channel.first_seen),
         "last_seen": iso_ts(channel.last_seen),
+        "tone": tone_near(tones or {}, channel.center_hz),
     }
