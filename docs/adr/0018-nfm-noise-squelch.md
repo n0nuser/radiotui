@@ -1,6 +1,6 @@
 # 0018 — NFM noise squelch on discriminator noise above the voice band
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-12
 - Issue: [#87](https://github.com/n0nuser/radiotui/issues/87)
 

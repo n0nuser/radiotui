@@ -1,6 +1,6 @@
 # 0017 — CTCSS/DCS detection and a tone squelch
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-12
 - Issue: [#86](https://github.com/n0nuser/radiotui/issues/86), after the noise
   squelch ([ADR 0018](0018-nfm-noise-squelch.md))
@@ -52,9 +52,12 @@ implementation follows the published tone list and code structure.
   for the recorder and doesn't count as voice for the autonomous hold. The
   tone squelch is ANDed with the noise squelch and RF gate, so it closes at
   once when the carrier drops instead of a window later.
-- **Speaker vs recorder.** The speaker stays live: a transmission loses its
-  first verify window (≤ 1 s) at the speaker. The recorder keeps a pre-roll of
-  one window and writes it when the squelch opens, so nothing is lost on disk.
+- **Speaker vs recorder.** The tone squelch is off by default until it is
+  validated on hardware. When it is on, the speaker stays live, so a
+  transmission loses its first verify window (≤ 1 s) at the speaker. Whether
+  to switch to look-ahead playback instead is revisited after the hardware
+  runs. The recorder keeps a pre-roll of one window and writes it when the
+  squelch opens, so nothing is lost on disk.
 - **Selector.** A key cycles `off → any → <the tone detected now>`. Other
   values come from the bookmark's optional `tone = "88.5"` / `"D023N"` field
   in `channels.toml`. Files without it load as `off` (ADR 0005).

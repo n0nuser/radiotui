@@ -1,6 +1,6 @@
 # 0016 — SSB and CW by shift, complex low-pass and real part
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-12
 - Issue: [#85](https://github.com/n0nuser/radiotui/issues/85)
 
