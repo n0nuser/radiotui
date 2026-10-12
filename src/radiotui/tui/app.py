@@ -902,6 +902,9 @@ class RadioTuiApp(App):
         def set_squelch(v: float | None) -> None:
             scanner.squelch_rssi_dbfs = None if v is None else clamp(v, -70.0, -10.0)
 
+        def set_noise_squelch(v: float | None) -> None:
+            scanner.noise_squelch_db = None if v is None else clamp(v, 3.0, 40.0)
+
         def set_volume(v: float) -> None:
             audio.volume_db = clamp_volume_db(v)
             if self.session is not None:
@@ -942,6 +945,16 @@ class RadioTuiApp(App):
                 5.0,
                 "{:.0f} dBFS",
                 none_label="off (VOX only)",
+            ),
+            SettingRow(
+                "Squelch (noise, NFM)",
+                lambda: scanner.noise_squelch_db,
+                set_noise_squelch,
+                3.0,
+                40.0,
+                1.0,
+                "{:.0f} dB quieting",
+                none_label="off",
             ),
             SettingRow(
                 "Volume",

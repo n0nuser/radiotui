@@ -247,7 +247,7 @@ switch into HF direct sampling automatically.
 Stop retyping flags: `~/.config/radiotui/config.toml` merges as
 **defaults → config file → CLI flags**, so flags still win. `radiotui config`
 shows the path; `--no-config` ignores it for one run.
-Optional settings (`gain_db`, `squelch_rssi_dbfs`) are off when the key is
+Optional settings (`gain_db`, `squelch_rssi_dbfs`, `noise_squelch_db`) are off when the key is
 omitted; TOML has no `null`, and strings such as `"off"` are rejected. Turn a
 `[hardware]` switch off for one run with `--no-bias-tee` or `--no-offset-tune`.
 
@@ -259,6 +259,8 @@ gain_db = 28.0       # default gain when --gain is not given
 
 [scanner]
 squelch_rssi_dbfs = -30   # RF gate for recordings; omit for VOX level only
+# noise_squelch_db = 12    # NFM noise squelch: mutes speaker and recorder until a
+                           # carrier quiets the noise by 12 dB; off until validated on hardware
 region = "r1"              # ITU region: r1, r2, or r3
 
 [audio]
