@@ -18,14 +18,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from radiotui.audio.demod import (
+    DEFAULT_CHANNEL_BW_HZ,
     DemodState,
     audio_to_pcm16,
     channel_audio,
+    channel_decimation,
     rssi_dbfs,
     scale_pcm16,
 )
 from radiotui.audio.player import AudioPlayer
 from radiotui.audio.recorder import ClipInfo, VoxRecorder
+from radiotui.audio.tones import WINDOW_S, ToneDetector
 from radiotui.config import Settings, clamp_volume_db, effective_sample_rate
 from radiotui.core.models import DemodMode
 from radiotui.sdr.base import SdrDevice
@@ -84,6 +87,10 @@ class MonitorStatus:
     capturing: bool
     #: SSB/CW fine tune in Hz; 0 for a fresh listen.
     clarifier_hz: float = 0.0
+    #: CTCSS tone or DCS code heard now (NFM), None if none.
+    tone: str | None = None
+    #: Tone squelch: None (off), "any", or a tone/code (ADR 0017).
+    tone_squelch: str | None = None
 
 
 class ChannelMonitor:
@@ -110,6 +117,7 @@ class ChannelMonitor:
         on_rssi: Callable[[float], None] | None = None,
         on_clip: Callable[[ClipInfo], None] | None = None,
         on_error: Callable[[str], None] | None = None,
+        on_tone: Callable[[str | None], None] | None = None,
         player: AudioPlayer | None = None,
         before_read: Callable[[], None] | None = None,
     ) -> None:
@@ -125,6 +133,9 @@ class ChannelMonitor:
         self._on_error = on_error
         self._demod_state = DemodState()
         self._noise_squelch = NoiseSquelch()
+        self._on_tone = on_tone
+        self._tones: ToneDetector | None = None
+        self.tone_squelch: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._reader: threading.Thread | None = None
@@ -187,6 +198,8 @@ class ChannelMonitor:
             recording=self._recorder.enabled if pending is None else pending,
             capturing=self._recorder.recording,
             clarifier_hz=self.clarifier_hz,
+            tone=self._recorder.tone,
+            tone_squelch=self.tone_squelch,
         )
 
     def silent_for(self) -> float:
@@ -253,6 +266,12 @@ class ChannelMonitor:
             if not self._player.start():
                 self._report("no audio backend found: install ffmpeg or alsa-utils")
 
+    def set_tone_squelch(self, tone: str | None) -> None:
+        """Hear only blocks carrying ``tone`` ("any" = any tone); None = off."""
+        self.tone_squelch = tone
+        # Keep what the verify window gates out, so clips lose nothing.
+        self._recorder.preroll_s = WINDOW_S if tone is not None else 0.0
+
     def set_clarifier_hz(self, clarifier_hz: float) -> None:
         # Read by the monitor thread on its next block; a float store is atomic.
         self.clarifier_hz = clarifier_hz
@@ -282,15 +301,40 @@ class ChannelMonitor:
         gain = 10.0 ** (self._settings.audio.volume_db / 20.0)
         return scale_pcm16(pcm, gain)
 
+    def _track_tone(self) -> None:
+        if self._demod is not DemodMode.NFM:
+            return
+        if self._tones is None:
+            fs = effective_sample_rate(self._settings.scanner)
+            bw = self._channel_bw_hz or DEFAULT_CHANNEL_BW_HZ[self._demod]
+            self._tones = ToneDetector(fs / channel_decimation(fs, bw, self._demod))
+        self._tones.feed(self._demod_state.discriminator)
+        tone = self._tones.detected
+        if tone != self._recorder.tone:
+            self._recorder.tone = tone
+            if self._on_tone:
+                self._on_tone(tone)
+
     def _squelch_open(self, block_s: float) -> bool:
-        """Noise squelch ANDed with the RF gate; always open when it is off."""
-        scanner = self._settings.scanner
-        if scanner.noise_squelch_db is None or self._demod is not DemodMode.NFM:
+        """Noise squelch (with the RF gate) ANDed with the tone squelch.
+
+        Each is open when it is off. The tone check runs every block so its
+        consecutive-match count stays current.
+        """
+        if self._demod is not DemodMode.NFM:
             return True
-        quieting = self._demod_state.noise_quieting_db
-        is_open = self._noise_squelch.update(quieting, -scanner.noise_squelch_db, block_s)
-        rf_gate = scanner.squelch_rssi_dbfs
-        return is_open and (rf_gate is None or self.rssi_dbfs >= rf_gate)
+        scanner = self._settings.scanner
+        is_open = True
+        if scanner.noise_squelch_db is not None:
+            quieting = self._demod_state.noise_quieting_db
+            is_open = self._noise_squelch.update(quieting, -scanner.noise_squelch_db, block_s)
+            rf_gate = scanner.squelch_rssi_dbfs
+            is_open = is_open and (rf_gate is None or self.rssi_dbfs >= rf_gate)
+        selected = self.tone_squelch
+        if selected is not None:
+            tone_ok = self._tones is not None and self._tones.matches(selected)
+            is_open = is_open and tone_ok
+        return is_open
 
     def _read_loop(self) -> None:
         """Keep the device drained; never do arithmetic on this thread."""
@@ -364,6 +408,7 @@ class ChannelMonitor:
             )
             if len(audio):
                 pcm = audio_to_pcm16(audio)
+                self._track_tone()
                 squelch_open = self._squelch_open(len(audio) / rate)
                 if not self.muted:
                     # Silence, not nothing: the player must stay fed.

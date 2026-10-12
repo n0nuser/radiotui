@@ -289,6 +289,7 @@ write this file immediately.
 freq_hz = 145_500_000
 name = "2m calling"
 demod = "nfm"
+tone = "88.5"        # optional tone squelch: a CTCSS tone, or a DCS code like "D023N"
 
 [[ignore]]
 freq_hz = 96_000_000
@@ -326,6 +327,7 @@ once per completed sweep.
 | `<` / `>` | volume down / up while listening |
 | `d` | next demod mode while listening (NFM → WFM → AM → USB → LSB → CW) |
 | `(` / `)` | SSB/CW clarifier -/+ 10 Hz while listening (±2.5 kHz) |
+| `Shift-T` | NFM tone squelch: off → any tone → the CTCSS/DCS tone heard now → off |
 | `[` / `]` | detection threshold down / up |
 | `{` / `}` | hop dwell down / up |
 | `,` | sort table by frequency / peak |

@@ -424,6 +424,8 @@ class DemodState:
     sideband_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
     iq_dc: complex | None = None
     noise_quieting_db: float = 0.0
+    #: Last NFM block before the sub-audible high-pass: the tone detector's input.
+    discriminator: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
 
 def channel_decimation(fs: float, channel_bw_hz: float, mode: DemodMode) -> int:
@@ -472,6 +474,8 @@ def channel_audio(
         if state is not None and len(low) >= 64:
             state.noise_quieting_db = noise_quieting_db(low, chan_fs, state)
         discriminator = demod_nfm(low, chan_fs, state=state)
+        if state is not None:
+            state.discriminator = discriminator
         audio = subaudible_highpass(discriminator, chan_fs, state)
     if len(audio) < 8:
         return np.zeros(output_rate_hz // 10, dtype=np.float32)

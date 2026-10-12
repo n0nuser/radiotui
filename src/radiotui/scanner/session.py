@@ -76,6 +76,14 @@ class Rssi:
 
 
 @dataclass(frozen=True)
+class ToneDetected:
+    """The CTCSS tone or DCS code heard on ``freq_hz`` changed (None = gone)."""
+
+    freq_hz: float
+    tone: str | None
+
+
+@dataclass(frozen=True)
 class ClipSaved:
     clip: ClipInfo
 
@@ -112,6 +120,7 @@ SessionEvent = (
     | ListenStopped
     | Rssi
     | ClipSaved
+    | ToneDetected
     | HoldEngaged
     | HoldReleased
     | Notice
@@ -228,6 +237,7 @@ class TunerSession:
         self._settings = settings
         self._emit = on_event
         self._user_channels = UserChannels()
+        self._tones: dict[float, str] = {}
         self._inbox: queue.Queue = queue.Queue()
         self._ops_lock = threading.Lock()
         self._device_ops: list[Callable[[SdrDevice], None]] = []
@@ -308,6 +318,17 @@ class TunerSession:
         monitor = self._monitor
         if monitor is not None:
             monitor.set_clarifier_hz(clarifier_hz)
+
+    def set_tone_squelch(self, tone: str | None) -> None:
+        """None (off), "any", or a CTCSS tone / DCS code (ADR 0017)."""
+        monitor = self._monitor
+        if monitor is not None:
+            monitor.set_tone_squelch(tone)
+
+    @property
+    def tones(self) -> dict[float, str]:
+        """Last tone heard on each listened frequency, for the table and exports."""
+        return self._tones
 
     def set_volume_db(self, volume_db: float) -> None:
         self._settings.audio.volume_db = clamp_volume_db(volume_db)
@@ -548,6 +569,14 @@ class TunerSession:
             if self._monitor is monitor:  # drop readings from a monitor being replaced
                 self._emit(Rssi(dbfs))
 
+        def on_tone(tone: str | None) -> None:
+            if self._monitor is not monitor:
+                return
+            if tone is not None:
+                # Rebind, never mutate: other threads copy this map.
+                self._tones = {**self._tones, freq_hz: tone}
+            self._emit(ToneDetected(freq_hz, tone))
+
         def on_error(message: str) -> None:
             self._emit(SessionError(message))
             self._inbox.put(_Wake())  # let the session notice if the monitor ended
@@ -566,8 +595,10 @@ class TunerSession:
             on_rssi=on_rssi,
             on_clip=lambda clip: self._emit(ClipSaved(clip)),
             on_error=on_error,
+            on_tone=on_tone,
             before_read=self._run_device_ops,
         )
+        monitor.set_tone_squelch(self._user_channels.tone_for(freq_hz))
         self._monitor = monitor
         monitor.start()
 

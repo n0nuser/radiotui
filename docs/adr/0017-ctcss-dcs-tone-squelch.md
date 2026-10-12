@@ -75,3 +75,30 @@ while a tone is selected. With `off`, nothing changes.
 Male voice (85–180 Hz fundamentals) overlaps the CTCSS band. The acceptance
 tests include voice-like interference (a harmonic series with wandering
 pitch) as well as clean tones and noise.
+
+## Implementation notes (#86, 2026-10-12)
+
+- **Tone list.** 51 tones, the list in the
+  [demodulation study](../research/demodulation-landscape.md), not 50.
+- **Verify** uses one check: the tone's power share over a window of
+  1.5 / spacing. That window puts each neighbour 1.5 Hann bins from the
+  target (about 16 dB of leakage), so a separate neighbour comparison
+  rejected nothing the share test did not. Identify takes the listed tone
+  nearest the FFT peak and keeps it only if it passes the same share test,
+  which also rejects off-list tones, so there is no snap tolerance or
+  parabolic refinement.
+- **DCS.** Golay generator 0xC75. It reproduces the published "+023 = −047"
+  alias and 0xAE3 does not. Every window is syndrome-corrected (≤ 3 bits),
+  and a lock needs the same corrected word over 4 consecutive 23-bit
+  periods; the code is perfect, so a correction alone means nothing.
+  **Not yet checked against a real radio:** the bit order on air (C1
+  first) and which deviation direction is a 1. If either is wrong, normal
+  and inverted names swap, or codes don't decode. The squelch is off by
+  default until this is validated on hardware.
+- **Tone map.** `TunerSession.tones` keeps the last tone heard on each
+  listened frequency. Both the TUI table/export and the CLI export read it,
+  instead of each adapter keeping its own map. It is fed on the session's
+  monitor callback, the same source as the `ToneDetected` event.
+- **Cost.** About 1.5 ms per 64 ms block for identify, DCS and verify
+  together.
+

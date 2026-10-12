@@ -53,6 +53,7 @@ from radiotui.scanner.session import (
     SessionEvent,
     SweepFailed,
     SweepStarted,
+    ToneDetected,
     TunerSession,
 )
 from radiotui.sdr.base import SdrDevice
@@ -332,20 +333,22 @@ def cmd_scan(args) -> None:
                 if args.export and time.time() - last_export > 30.0:
                     channels = session.channels
                     if channels:
-                        _export_sweep(channels, args.export, band, settings, sweeps)
+                        _export_sweep(channels, args.export, band, settings, sweeps, session.tones)
                         last_export = time.time()
     except KeyboardInterrupt:
         pass
     finally:
         channels = session.channels
         if args.export and channels:
-            path = _export_sweep(channels, args.export, band, settings, sweeps)
+            path = _export_sweep(channels, args.export, band, settings, sweeps, session.tones)
             console.print(f"[green]Exported {len(channels)} channel(s) to {path}[/green]")
         _close_session(session, events, device)
     console.print("[dim]Scan stopped.[/dim]")
 
 
-def _export_sweep(channels, path_str: str, band: Band, settings, sweeps: int) -> Path:
+def _export_sweep(
+    channels, path_str: str, band: Band, settings, sweeps: int, tones: dict[float, str]
+) -> Path:
     context = {
         "band": band.label,
         "start_hz": band.start_hz,
@@ -357,7 +360,7 @@ def _export_sweep(channels, path_str: str, band: Band, settings, sweeps: int) ->
         "sample_rate_hz": effective_sample_rate(settings.scanner),
         "sweeps_completed": sweeps,
     }
-    return export_channels(channels, path_str, context=context)
+    return export_channels(channels, path_str, context=context, tones=tones)
 
 
 def _print_clip(clip: ClipInfo) -> None:
@@ -380,6 +383,9 @@ def _print_session_event(event: SessionEvent, device: SdrDevice) -> None:
         _print_hf(event.hf_ok, device)
     elif isinstance(event, ClipSaved):
         _print_clip(event.clip)
+    elif isinstance(event, ToneDetected):
+        if event.tone is not None:
+            console.print(f"tone [cyan]{event.tone}[/cyan] on {event.freq_hz / 1e6:.4f} MHz")
     elif isinstance(event, HoldEngaged):
         req = event.request
         console.print(
