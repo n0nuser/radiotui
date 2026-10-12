@@ -58,6 +58,8 @@ class MonitorStatus:
     recording: bool
     #: A clip file is open right now.
     capturing: bool
+    #: SSB/CW fine tune in Hz; 0 for a fresh listen.
+    clarifier_hz: float = 0.0
 
 
 class ChannelMonitor:
@@ -128,6 +130,7 @@ class ChannelMonitor:
         self._record_lock = threading.Lock()
         self._record_request: bool | None = None
         self.muted = muted
+        self.clarifier_hz = 0.0
         self.rssi_dbfs: float = -120.0
 
     @property
@@ -158,6 +161,7 @@ class ChannelMonitor:
             backend=self._player.backend,
             recording=self._recorder.enabled if pending is None else pending,
             capturing=self._recorder.recording,
+            clarifier_hz=self.clarifier_hz,
         )
 
     def silent_for(self) -> float:
@@ -223,6 +227,10 @@ class ChannelMonitor:
             # it was never launched or has died.
             if not self._player.start():
                 self._report("no audio backend found: install ffmpeg or alsa-utils")
+
+    def set_clarifier_hz(self, clarifier_hz: float) -> None:
+        # Read by the monitor thread on its next block; a float store is atomic.
+        self.clarifier_hz = clarifier_hz
 
     @property
     def volume_db(self) -> float:
@@ -317,6 +325,7 @@ class ChannelMonitor:
                 channel_bw_hz=self._channel_bw_hz,
                 state=self._demod_state,
                 deemphasis_us=self._settings.audio.deemphasis_us,
+                clarifier_hz=self.clarifier_hz,
             )
             if len(audio):
                 pcm = audio_to_pcm16(audio)

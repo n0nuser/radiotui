@@ -254,7 +254,13 @@ def demod_am(iq: np.ndarray, fs: float, state: DemodState | None = None) -> np.n
         state.am_dc_history = padded[-(window - 1) :]
     else:
         dc = np.convolve(envelope, np.ones(window) / window, mode="same")
-    audio = envelope - dc
+    return block_agc(envelope - dc, state)
+
+
+def block_agc(audio: np.ndarray, state: DemodState | None = None) -> np.ndarray:
+    """Slow per-block AGC shared by AM, SSB and CW."""
+    if len(audio) == 0:
+        return audio  # an empty mean is NaN, which would poison the held gain
     rms = float(np.sqrt(np.mean(audio**2))) + 1e-9
     target = 0.35
     instant = min(max(target / rms, 0.05), 16.0)
@@ -271,17 +277,89 @@ def demod_am(iq: np.ndarray, fs: float, state: DemodState | None = None) -> np.n
     return audio * gain
 
 
+#: Audio passband per mode, relative to the carrier after the CW note shift
+#: (ADR 0016): one sideband for SSB, a narrow window round the note for CW.
+SIDEBAND_HZ = {
+    DemodMode.USB: (300.0, 2_700.0),
+    DemodMode.LSB: (-2_700.0, -300.0),
+    DemodMode.CW: (450.0, 950.0),
+}
+CW_PITCH_HZ = 700.0
+#: Clarifier range: past this the voice leaves the 300-2700 Hz passband.
+CLARIFIER_LIMIT_HZ = 2_500.0
+
+
+@lru_cache(maxsize=8)
+def sideband_taps(mode: DemodMode, fs: float) -> np.ndarray:
+    """Complex band-pass: a windowed-sinc low-pass moved onto the passband.
+
+    Only one side of 0 Hz passes, so the real part of the output is the
+    audio of that sideband alone. 200 Hz transitions keep it ~200 taps at
+    the 12 kS/s SSB rate.
+    """
+    lo, hi = SIDEBAND_HZ[mode]
+    half, centre = (hi - lo) / 2 / fs, (hi + lo) / 2
+    ntaps = int(3.3 * fs / 200.0) | 1
+    n = np.arange(ntaps) - (ntaps - 1) / 2
+    lowpass = 2 * half * np.sinc(2 * half * n) * np.hamming(ntaps)
+    return lowpass / lowpass.sum() * np.exp(2j * np.pi * centre * n / fs)
+
+
+def mix(iq: np.ndarray, offset_hz: float, fs: float, state: DemodState | None = None) -> np.ndarray:
+    """Shift by ``offset_hz`` with the phase carried across blocks.
+
+    ``frequency_shift`` restarts at t = 0, which clicks at every block when
+    the shift is applied block by block.
+    """
+    phase0 = 0.0 if state is None else state.mix_phase
+    step = 2 * np.pi * offset_hz / fs
+    if state is not None:
+        state.mix_phase = (phase0 + step * len(iq)) % (2 * np.pi)
+    return iq * np.exp(1j * (phase0 + step * np.arange(len(iq))))
+
+
+def demod_ssb(
+    iq: np.ndarray,
+    fs: float,
+    mode: DemodMode,
+    state: DemodState | None = None,
+    clarifier_hz: float = 0.0,
+) -> np.ndarray:
+    """USB, LSB or CW: shift, keep one side, take the real part (ADR 0016).
+
+    ``clarifier_hz`` moves the receive frequency up without a retune, so a
+    station tuned a little low comes back to its natural pitch.
+    """
+    offset = (CW_PITCH_HZ if mode is DemodMode.CW else 0.0) - clarifier_hz
+    shifted = mix(iq, offset, fs, state)
+    taps = sideband_taps(mode, fs)
+    history = None if state is None else state.sideband_history
+    if history is None or len(history) != len(taps) - 1:
+        history = np.zeros(len(taps) - 1, dtype=np.complex128)
+    padded = np.concatenate([history, shifted])
+    out = np.convolve(padded, taps, mode="valid").real
+    if state is not None:
+        state.sideband_history = padded[-(len(taps) - 1) :]
+    return block_agc(out, state)
+
+
 #: Noise/capture floor per mode: demodulation breaks below these rates.
 MIN_CHANNEL_RATE_HZ = {
     DemodMode.NFM: 30_000.0,
     DemodMode.WFM: 240_000.0,
     DemodMode.AM: 16_000.0,
+    DemodMode.USB: 12_000.0,
+    DemodMode.LSB: 12_000.0,
+    DemodMode.CW: 12_000.0,
 }
 
 DEFAULT_CHANNEL_BW_HZ = {
     DemodMode.NFM: 12_500.0,
     DemodMode.WFM: 200_000.0,
     DemodMode.AM: 8_330.0,
+    DemodMode.USB: 2_700.0,
+    DemodMode.LSB: 2_700.0,
+    DemodMode.CW: 500.0,
 }
 
 
@@ -301,6 +379,8 @@ class DemodState:
     resample_output_samples: int = 0
     audio_lpf_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
     subaudible_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    mix_phase: float = 0.0
+    sideband_history: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
 
 def channel_decimation(fs: float, channel_bw_hz: float, mode: DemodMode) -> int:
@@ -330,6 +410,7 @@ def channel_audio(
     channel_bw_hz: float | None = None,
     state: DemodState | None = None,
     deemphasis_us: int = 50,
+    clarifier_hz: float = 0.0,
 ) -> np.ndarray:
     """Full receive chain: channelize, demodulate, resample to output_rate_hz."""
     bw = DEFAULT_CHANNEL_BW_HZ[mode] if channel_bw_hz is None else channel_bw_hz
@@ -340,6 +421,8 @@ def channel_audio(
         audio = demod_wfm(low, chan_fs, state=state, deemphasis_us=deemphasis_us)
     elif mode is DemodMode.AM:
         audio = demod_am(low, chan_fs, state=state)
+    elif mode in SIDEBAND_HZ:
+        audio = demod_ssb(low, chan_fs, mode, state, clarifier_hz)
     else:
         # The unfiltered discriminator output is the tone detector's input
         # (ADR 0017); only what is heard and recorded loses the tones.

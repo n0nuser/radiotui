@@ -19,7 +19,8 @@ bands on its own, estimates the noise floor, flags frequencies that show
   carousel with the frequency ruler beneath it, a bright tuning cursor you walk
   with the arrow keys, and a dial/RSSI meter under that; channel table, log and
   recordings pane are opt-in (`t`/`c`), settings live in a menu (`m`).
-- **Listen & record** — NFM / WFM / AM demodulation in numpy, playback through
+- **Listen & record** — NFM / WFM / AM / USB / LSB / CW demodulation in numpy
+  (80m and 40m default to LSB; `d` changes mode, `(`/`)` fine-tune SSB), playback through
   `ffplay`/`aplay`, VOX-gated WAV recording of transmissions with an optional
   RF-carrier squelch gate so quiet channels stop producing hiss-only clips.
 - **Bookmarks & ignore list** (`~/.config/radiotui/channels.toml`) — name the
@@ -321,6 +322,8 @@ once per completed sweep.
 | `n` / `p` | jump to next / previous active channel (panels) |
 | `+` / `-` | gain up / down |
 | `<` / `>` | volume down / up while listening |
+| `d` | next demod mode while listening (NFM → WFM → AM → USB → LSB → CW) |
+| `(` / `)` | SSB/CW clarifier -/+ 10 Hz while listening (±2.5 kHz) |
 | `[` / `]` | detection threshold down / up |
 | `{` / `}` | hop dwell down / up |
 | `,` | sort table by frequency / peak |
