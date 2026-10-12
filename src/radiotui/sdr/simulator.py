@@ -6,6 +6,7 @@ carriers, airband AM bursts, PMR446 voice bursts and 2m amateur traffic.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -62,6 +63,8 @@ class SimulatedDevice(SdrDevice):
         # Running integral of each FM carrier's modulation, so phase stays
         # continuous across reads (a restart per read clicks at block rate).
         self._fm_integral = [0.0] * len(self._carriers)
+        # When the samples handed out so far would have finished arriving.
+        self._delivered_until = 0.0
 
     @property
     def center_freq_hz(self) -> float:
@@ -84,6 +87,7 @@ class SimulatedDevice(SdrDevice):
 
     def read_samples(self, count: int) -> np.ndarray:
         fs = self._sample_rate
+        self._pace(count / fs)
         t_start = self._t
         t = t_start + np.arange(count) / fs
         self._t += count / fs
@@ -125,6 +129,16 @@ class SimulatedDevice(SdrDevice):
         if peak > 0.95:
             iq *= 0.95 / peak
         return iq
+
+    def _pace(self, duration_s: float) -> None:
+        """Block until the samples would have arrived, like a real dongle.
+
+        The monitor has no clock of its own (ADR 0012): without this, audio
+        and recordings from the simulator run many times faster than real time.
+        """
+        now = time.monotonic()
+        self._delivered_until = max(self._delivered_until, now) + duration_s
+        time.sleep(self._delivered_until - now)
 
     def _envelope(self, carrier: SimCarrier, count: int, fs: float, t_start: float) -> np.ndarray:
         if carrier.duty_cycle >= 1.0:
