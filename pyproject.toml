@@ -32,6 +32,8 @@ dev = ["pytest>=8.0", "pytest-asyncio>=1.0", "ruff>=0.6"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# A test stuck this long dumps every thread's stack to stderr (docs/testing.md).
+faulthandler_timeout = 120
 
 [tool.ruff]
 line-length = 100
