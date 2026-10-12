@@ -303,6 +303,12 @@ class TunerSession:
         if monitor is not None:
             monitor.set_muted(muted)
 
+    def set_clarifier_hz(self, clarifier_hz: float) -> None:
+        """SSB/CW fine tune: shifts the demodulator, never retunes (ADR 0016)."""
+        monitor = self._monitor
+        if monitor is not None:
+            monitor.set_clarifier_hz(clarifier_hz)
+
     def set_volume_db(self, volume_db: float) -> None:
         self._settings.audio.volume_db = clamp_volume_db(volume_db)
 
@@ -525,7 +531,7 @@ class TunerSession:
         assert request is not None
         sweeper = self._sweeper
         if sweeper is not None:
-            sweeper.cooldown_channel(request.freq_hz)
+            sweeper.cooldown_channel(request.channel_hz)
         clips = self._stop_monitor()
         self._emit(HoldReleased(request.freq_hz, reason, clips))
         self._release_parked_sweeper()
@@ -554,7 +560,9 @@ class TunerSession:
             muted=muted,
             record=record,
             band_label=band.label if band is not None else "",
-            channel_bw_hz=band.channel_bw_hz if band is not None else None,
+            # A band's channel width belongs to its own mode: 200 kHz of FM
+            # broadcast would swamp a USB listen on the same band.
+            channel_bw_hz=band.channel_bw_hz if band is not None and band.demod is demod else None,
             on_rssi=on_rssi,
             on_clip=lambda clip: self._emit(ClipSaved(clip)),
             on_error=on_error,

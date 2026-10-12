@@ -105,7 +105,7 @@ def test_parse_valid_file():
         '[[bookmark]]\nfreq_hz = 0\nname = "x"',
         '[[bookmark]]\nfreq_hz = 1e6\nname = ""',
         "[[bookmark]]\nfreq_hz = 1e6",
-        '[[bookmark]]\nfreq_hz = 1e6\nname = "x"\ndemod = "usb"',
+        '[[bookmark]]\nfreq_hz = 1e6\nname = "x"\ndemod = "dmr"',
         "[[ignore]]\nwidth_hz = 100",
         "[[ignore]]\nfreq_hz = -5",
         "[[ignore]]\nfreq_hz = 1e6\nwidth_hz = 0",
