@@ -10,7 +10,7 @@ import pytest
 
 from radiotui.audio.recorder import VoxRecorder
 from radiotui.config import AudioSettings, ScannerSettings, Settings
-from radiotui.core.models import DemodMode, HoldRequest
+from radiotui.core.models import Channel, DemodMode, HoldRequest
 from radiotui.dsp.spectrum import SweepPlan
 from radiotui.scanner.monitor import auto_hold_release_reason
 from radiotui.scanner.sweeper import Sweeper
@@ -303,3 +303,14 @@ async def test_tui_autonomous_hold_cycles_end_to_end() -> None:
     finally:
         peak = sampler.stop()
     assert peak <= 1
+
+
+def test_released_ssb_hold_cools_down_its_channel():
+    """The hold tunes the SSB carrier, 1.5 kHz from the peak; cooldown must key the peak."""
+    sweeper, _ = make_sweeper()
+    # 7.1024 MHz and its carrier 7.1039 MHz round to different 5 kHz keys.
+    channel = Channel(7.1024e6, 2_400.0, -30.0, 30.0, DemodMode.LSB, 0.0, 0.0)
+    req = sweeper._auto_hold_candidate([channel])
+    assert req.freq_hz == pytest.approx(7.1039e6)
+    sweeper.cooldown_channel(req.channel_hz)
+    assert sweeper._auto_hold_candidate([channel]) is None
