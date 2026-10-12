@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 
@@ -30,8 +31,12 @@ class Sweeper:
         plan: SweepPlan,
         settings: ScannerSettings,
         out_queue: queue.Queue[ScanState],
+        before_read: Callable[[], None] | None = None,
     ) -> None:
         self._device = device
+        # Runs on this thread before every read: device commands (gain) must
+        # never overlap read_samples.
+        self._before_read = before_read
         self._plan = plan
         self._settings = settings
         self._queue = out_queue
@@ -136,6 +141,8 @@ class Sweeper:
                     return
                 self.hops_done += 1
                 try:
+                    if self._before_read:
+                        self._before_read()
                     self._device.set_center_freq_hz(center)
                     iq = self._device.read_samples(samples_per_hop)
                 except (OSError, RuntimeError, ValueError) as exc:
