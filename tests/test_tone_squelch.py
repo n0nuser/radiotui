@@ -204,3 +204,27 @@ async def test_shift_t_cycles_off_any_detected(monkeypatch):
         assert "TSQ 88.5" in str(app.query_one("#meter").render())
         await pilot.press("T")
         assert await wait_until(pilot, lambda: listening().tone_squelch is None)
+
+
+def test_a_bookmark_tone_does_not_leak_to_the_next_channel():
+    """PMR446 channels are 12.5 kHz apart; channel 1's tone must not mute channel 2."""
+    from radiotui.audio.tones import tone_near
+
+    book = UserChannels(bookmarks=[Bookmark(446.00625e6, "pmr 1", DemodMode.NFM, "88.5")])
+    assert book.tone_for(446.01875e6) is None
+    assert book.tone_for(446.0063e6) == "88.5"
+    assert tone_near({446.00625e6: "88.5"}, 446.01875e6) == ""
+
+
+def test_pre_roll_is_dropped_when_the_tone_squelch_is_turned_off(tmp_path):
+    settings = AudioSettings(recordings_dir=str(tmp_path), min_clip_seconds=0.0)
+    recorder = VoxRecorder(446e6, settings)
+    recorder.enabled = True
+    recorder.preroll_s = WINDOW_S
+    for _ in range(10):
+        recorder.feed(tone_pcm(0.1), 48_000, squelch_open=False)
+    recorder.preroll_s = 0.0
+    recorder.feed(tone_pcm(0.1), 48_000, squelch_open=False)
+    for _ in range(10):
+        recorder.feed(tone_pcm(0.1), 48_000)
+    assert recorder.stop()[0].seconds < 1.5

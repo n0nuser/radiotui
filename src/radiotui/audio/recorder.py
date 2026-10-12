@@ -130,6 +130,8 @@ class VoxRecorder:
             self._clip_tone = self.tone
         if self._file is not None and rssi_dbfs is not None:
             self._rssi_values.append(rssi_dbfs)
+        if self.preroll_s <= 0:
+            self._preroll = []  # never replay audio held for an earlier selection
         if not self.enabled:
             return
         try:
