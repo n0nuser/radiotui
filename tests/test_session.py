@@ -251,3 +251,24 @@ def test_sweep_emits_scan_updates_only_when_started(start):
         session.close()
         assert session.wait_closed(10.0)
     assert (update is not None) == start
+
+
+def test_an_unexpected_failure_does_not_kill_the_session():
+    """The session thread must outlive a bad step, or later requests are lost."""
+
+    class BrokenGainDevice(PacedDevice):
+        def set_gain_db(self, gain_db) -> None:
+            if self.gain_calls == 0:
+                self.gain_calls += 1
+                raise TypeError("broken device command")
+
+    events: queue.Queue = queue.Queue()
+    session = TunerSession.start(BrokenGainDevice(), Settings(), events.put)
+    try:
+        session.set_gain(10.0)  # nothing is reading, so the session thread runs it
+        assert wait_for_event(events, SessionError, timeout_s=5.0)
+        session.listen(145.5e6, DemodMode.NFM)
+        assert wait_until(lambda: session.status().listen_freq_hz == 145.5e6)
+    finally:
+        session.close()
+        assert session.wait_closed(10.0)

@@ -1,6 +1,6 @@
 # 0004 — Single-consumer tuner exclusivity
 
-- Status: Accepted
+- Status: Accepted; enforcement amended by [0014](0014-tuner-session-owns-handoffs.md)
 - Date: 2026-08-23
 
 ## Context

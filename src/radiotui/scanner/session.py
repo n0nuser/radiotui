@@ -358,6 +358,10 @@ class TunerSession:
                     except queue.Empty:
                         break
                 self._handle(batch)
+        except Exception as exc:
+            # Last resort: steps are guarded, so reaching here is a bug; say so
+            # rather than leaving an app that looks alive but ignores requests.
+            self._emit(SessionError(f"tuner session stopped: {exc}"))
         finally:
             self._shutdown()
 
@@ -382,7 +386,7 @@ class TunerSession:
             self._guarded(self._execute, tuner[-1])
         self._guarded(self._check_monitor)
         if not self._reader_active():
-            self._run_device_ops()
+            self._guarded(self._run_device_ops)
 
     def _guarded(self, step: Callable, *args) -> None:
         # The session thread must survive a failing step, or every later
