@@ -418,7 +418,6 @@ class RadioTuiApp(App):
         self._start_sweeper = start_sweeper
         self._overflow_band_index = -1
         self.bias_tee_on = False
-        self.hf_active = False
         self.settings = settings or Settings()
         # The session owns the device, sweeper, monitor and hold; the app only
         # sends it requests and renders what it reports (ADR 0014).
@@ -580,7 +579,6 @@ class RadioTuiApp(App):
                 self._show_rssi(dbfs)
                 return  # throttled repaint inside
             case SweepStarted(band, hops, hf_ok):
-                self.hf_active = bool(hf_ok)
                 self._log_hf(hf_ok)
                 rate = f" @ {effective_sample_rate(self.settings.scanner) / 1e3:.0f} kS/s"
                 self.log_line(
@@ -746,7 +744,7 @@ class RadioTuiApp(App):
         parts.append(f"dwell {self.settings.scanner.hop_dwell_s * 1000:.0f} ms")
         gain_label = f"{self.gain_db:.1f} dB" if self.gain_db is not None else "auto"
         parts.append(f"gain {gain_label}")
-        if self.hf_active:
+        if self.settings.scanner.hf_mode:  # kept current by the session
             parts.append("[cyan]HF[/cyan]")
         if self.bias_tee_on:
             parts.append("[yellow]bias ⚡[/yellow]")
