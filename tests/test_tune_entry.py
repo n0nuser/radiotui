@@ -128,9 +128,10 @@ async def test_monitor_handoff_waits_for_old_reader_before_starting_new_one():
         started: list[tuple[float, DemodMode]] = []
 
         class SlowMonitor:
-            def stop(self):
+            def stop(self) -> bool:
                 time.sleep(0.05)
                 stopped.set()
+                return True
 
         app.monitor = SlowMonitor()
         app._start_monitor_now = lambda freq, demod, muted, record, pause: started.append(

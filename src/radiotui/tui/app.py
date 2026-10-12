@@ -565,8 +565,8 @@ class RadioTuiApp(App):
             self.cursor_hz is None or not (self.plan.start_hz <= self.cursor_hz <= self.plan.end_hz)
         ):
             self.cursor_hz = (band.start_hz + band.end_hz) / 2
-        if self.sweeper is not None:
-            self.sweeper.stop()
+        if not self._stop_sweeper():
+            return
         hf = enable_hf(band_needs_hf(band), self.settings.scanner)
         self.hf_active = False
         if self.device.is_real:
@@ -714,9 +714,11 @@ class RadioTuiApp(App):
 
     def selected_channel(self) -> Channel | None:
         key = self.selected_key()
-        if key is None or self.sweeper is None:
+        if key is None:
             return None
-        for ch in self.sweeper.channels:
+        # The table's own snapshot: the sweeper's live channel map belongs to
+        # the sweeper thread.
+        for ch in self._last_channels:
             if ch.center_hz == key:
                 return ch
         return None
@@ -754,13 +756,14 @@ class RadioTuiApp(App):
             )
             parts.append(f"[magenta]AUTO{hold}[/magenta]")
         if self.monitor is not None and self.monitor.running:
-            rec = " ●REC" if self.monitor.recorder.recording else ""
+            status = self.monitor.status()
+            rec = " ●REC" if status.capturing else ""
             mute = " 🔇" if self.muted else ""
             parts.append(
                 f"listening {self.monitor.freq_hz / 1e6:.4f} MHz "
                 f"({self.monitor.demod.value}){mute}{rec}"
             )
-            backend = self.monitor.player.backend
+            backend = status.backend
             vol = f"vol {self.monitor.volume_db:+.0f}dB"
             if backend:
                 parts.append(f"{vol} [dim]({backend})[/dim]")
@@ -812,17 +815,26 @@ class RadioTuiApp(App):
         if self.sweeper is None:
             return
         if self.sweeper.running:
-            self.sweeper.stop()
-            self.log_line("Sweep paused")
+            if self._stop_sweeper():
+                self.log_line("Sweep paused")
         else:
             self.sweeper.start()
             self.log_line("Sweep resumed")
 
-    def _pause_sweeper_for_monitor(self) -> None:
+    def _stop_sweeper(self) -> bool:
+        """Stop the sweep; False (and logged) if its read is wedged."""
+        if self.sweeper is None or self.sweeper.stop():
+            return True
+        self.log_line("[red]Sweeper did not stop: its device read is stuck.[/red]")
+        return False
+
+    def _pause_sweeper_for_monitor(self) -> bool:
         if self.sweeper is not None and self.sweeper.running:
             self.resume_sweep_after_listen = True
-            self.sweeper.stop()
+            if not self._stop_sweeper():
+                return False
             time.sleep(0.05)
+        return True
 
     @on(DataTable.RowSelected)
     def on_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -1074,7 +1086,7 @@ class RadioTuiApp(App):
     def _auto_release_check(self) -> None:
         assert self.monitor is not None and self.auto_hold_freq is not None
         reason = auto_hold_release_reason(
-            self.monitor.recorder.seconds_since_voice(),
+            self.monitor.silent_for(),
             time.time() - self._auto_hold_started_at,
             self.settings.scanner.hold_release_s,
             self.settings.scanner.max_hold_s,
@@ -1127,8 +1139,8 @@ class RadioTuiApp(App):
         enable_recorder: bool,
         pause_sweep: bool,
     ) -> None:
-        if pause_sweep:
-            self._pause_sweeper_for_monitor()
+        if pause_sweep and not self._pause_sweeper_for_monitor():
+            return  # a second reader on the tuner is worse than no listening
         self.muted = muted
         self._ignore_rssi = False
         monitor = ChannelMonitor(
@@ -1137,20 +1149,17 @@ class RadioTuiApp(App):
             demod,
             self.settings,
             muted=muted,
+            record=enable_recorder,
             band_label=self.band_label,
             channel_bw_hz=self._channel_bw_hz,
+            on_rssi=lambda db: self.post_message(self.RssiUpdate(db)),
+            on_clip=lambda clip: self.post_message(self.ClipSaved(clip)),
+            on_error=lambda msg: self.post_message(self.MonitorError(msg)),
         )
-        monitor.recorder.enabled = enable_recorder
-        monitor.recorder.on_clip_end = self.on_clip_end
-        monitor.on_rssi = lambda db: self.post_message(self.RssiUpdate(db))
-        monitor.on_error = lambda msg: self.post_message(self.MonitorError(msg))
         monitor.start()
         self.monitor = monitor
         verb = "Recording" if enable_recorder else "Listening"
         self.log_line(f"{verb} [bold]{freq_hz / 1e6:.4f} MHz[/bold] ({demod.value})")
-
-    def on_clip_end(self, clip) -> None:
-        self.post_message(self.ClipSaved(clip))
 
     @on(ClipSaved)
     def on_clip_saved(self, message) -> None:
@@ -1191,12 +1200,26 @@ class RadioTuiApp(App):
             return
 
         def finish_stop() -> None:
-            monitor.stop()
+            self._stop_until_stopped(monitor)
             self.call_from_thread(self._monitor_stop_finished, callback, monitor)
 
         with self._stops_lock:
             self._monitor_stops_pending += 1
         self.run_worker(finish_stop, thread=True, exit_on_error=False)
+
+    def _stop_until_stopped(self, monitor: ChannelMonitor) -> None:
+        """Block this worker until the monitor's threads are gone.
+
+        Handing the tuner on while a wedged read is still in flight would put
+        two readers on it (ADR 0004), so the handoff waits instead.
+        """
+        if monitor.stop():
+            return
+        self.post_message(
+            self.MonitorError("monitor still stopping: waiting for the device read to return")
+        )
+        while not monitor.stop():
+            pass  # each attempt already waits STOP_TIMEOUT_S per thread
 
     def _monitor_stop_done(self) -> bool:
         """Count one finished stop; True when none remain."""
@@ -1236,11 +1259,9 @@ class RadioTuiApp(App):
 
     def action_record(self) -> None:
         if self.monitor is not None:
-            recorder = self.monitor.recorder
-            recorder.enabled = not recorder.enabled
-            if not recorder.enabled:
-                recorder.stop()
-            self.log_line("Recording ON" if recorder.enabled else "Recording OFF")
+            recording = not self.monitor.status().recording
+            self.monitor.set_recording(recording)
+            self.log_line("Recording ON" if recording else "Recording OFF")
             return
         channel = self.selected_channel()
         if channel is None:
@@ -1339,7 +1360,7 @@ class RadioTuiApp(App):
         self.push_screen(HelpModal())
 
     def action_export_channels(self) -> None:
-        channels = self.sweeper.channels if self.sweeper is not None else []
+        channels = self._last_channels
         if not channels:
             self.log_line("[yellow]Nothing to export yet - no channels discovered.[/yellow]")
             return
@@ -1470,7 +1491,7 @@ class RadioTuiApp(App):
                 self._monitor_stops_pending += 1
 
             def final_stop() -> None:
-                monitor.stop()
+                self._stop_until_stopped(monitor)
                 if self._monitor_stop_done():
                     self._close_device()
 

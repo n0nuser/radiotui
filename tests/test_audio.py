@@ -1,4 +1,7 @@
 import shutil
+import subprocess
+import sys
+import threading
 import time
 
 import numpy as np
@@ -160,3 +163,19 @@ def test_player_stop_lets_ffplay_exit_on_eof():
     player.stop()
     assert time.monotonic() - t0 < 1.5
     assert proc.returncode == 0  # exited by itself, not killed
+
+
+def test_player_stop_does_not_wait_behind_a_blocked_write():
+    """A backend that stops reading must not wedge stop() behind write()."""
+    player = AudioPlayer(48_000)
+    player._proc = subprocess.Popen(  # a backend that never reads its stdin
+        [sys.executable, "-c", "import time; time.sleep(30)"], stdin=subprocess.PIPE
+    )
+    writer = threading.Thread(target=player.write, args=(b"\x00" * 2_000_000,), daemon=True)
+    writer.start()
+    time.sleep(0.3)  # the pipe buffer is full; write() is now blocked
+    t0 = time.monotonic()
+    player.stop()
+    assert time.monotonic() - t0 < 3.0
+    writer.join(timeout=3.0)
+    assert not writer.is_alive()

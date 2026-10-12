@@ -1,5 +1,6 @@
 import argparse
 import queue
+import threading
 
 import pytest
 
@@ -117,3 +118,30 @@ def test_hf_sweeper_reports_simulated_carrier_on_correct_axis():
         assert device._sample_rate == pytest.approx(plan.sample_rate_hz)
     finally:
         sweeper.stop()
+
+
+def test_sweeper_stop_reports_a_thread_that_will_not_stop(monkeypatch):
+    """Claiming a wedged sweeper stopped would let a monitor share the tuner."""
+
+    class WedgedDevice(SimulatedDevice):
+        def __init__(self) -> None:
+            super().__init__(carriers=[])
+            self.release = threading.Event()
+
+        def read_samples(self, count):
+            self.release.wait()
+            return super().read_samples(count)
+
+    monkeypatch.setattr(Sweeper, "STOP_TIMEOUT_S", 0.2)
+    device = WedgedDevice()
+    settings = ScannerSettings()
+    plan = SweepPlan.build(88e6, 90e6, settings.sample_rate_hz, settings.fft_size)
+    sweeper = Sweeper(device, plan, settings, queue.Queue(maxsize=4))
+    sweeper.start()
+    try:
+        assert not sweeper.stop()
+        assert sweeper.running
+    finally:
+        device.release.set()
+    assert sweeper.stop()
+    assert not sweeper.running

@@ -144,9 +144,9 @@ async def test_quit_teardown_is_bounded_when_monitor_stop_hangs(monkeypatch) -> 
     release = threading.Event()
     real_stop = ChannelMonitor.stop
 
-    def wedged_stop(self) -> None:
+    def wedged_stop(self) -> bool:
         release.wait()
-        real_stop(self)
+        return real_stop(self)
 
     monkeypatch.setattr(ChannelMonitor, "stop", wedged_stop)
     app = RadioTuiApp(force_sim=True)

@@ -26,7 +26,7 @@ use.
 | Textual event loop | `RadioTuiApp` | n/a |
 | `sweeper` | `scanner.sweeper.Sweeper` | bounded `queue.Queue[ScanState]` (maxsize 4, drops when full, except that a hold-carrying state blocks until queued), drained by `RadioTuiApp.poll_queue` every 0.15 s; only the latest state is used |
 | `reader-<MHz>` | `scanner.monitor.ChannelMonitor` | none: the only thread that calls `read_samples` while listening; feeds a two-block queue to the demod thread ([ADR 0012](adr/0012-decoupled-reader-thread.md)) |
-| `monitor-<MHz>` | `scanner.monitor.ChannelMonitor` | `on_rssi` / `on_error` callbacks that the app wires to `post_message` (`RssiUpdate`, `MonitorError`); recorder clips arrive as `ClipSaved` |
+| `monitor-<MHz>` | `scanner.monitor.ChannelMonitor` | `on_rssi` / `on_clip` / `on_error` callbacks passed to the constructor, which the app wires to `post_message` (`RssiUpdate`, `ClipSaved`, `MonitorError`). It is the only thread that touches the recorder while it runs: `set_recording` queues a request it applies between blocks. An exception escaping it is reported through `on_error` and ends the monitor |
 | teardown worker | `RadioTuiApp._stop_monitor_worker` (`run_worker(thread=True)`) | `call_from_thread(_monitor_stop_finished, callback)` |
 | player subprocess | `audio.player.AudioPlayer` | none (`ffplay` or `aplay` fed PCM over stdin) |
 
@@ -59,7 +59,10 @@ USB read:
    so late readings from the dying thread are discarded.
 2. `_stop_monitor_worker(monitor, callback)` runs `monitor.stop()` (which
    joins a possibly blocked USB read) in a worker thread and increments
-   `_monitor_stops_pending`.
+   `_monitor_stops_pending`. `stop()` returns False while a thread is still
+   alive; `_stop_until_stopped` then reports it once and keeps retrying, so
+   the handoff never starts a second reader. `Sweeper.stop()` reports the same
+   way, and callers refuse to start another reader while it fails.
 3. `_monitor_stop_finished` runs `callback` back on the event loop. That
    callback is where the next sweep or monitor starts.
 
