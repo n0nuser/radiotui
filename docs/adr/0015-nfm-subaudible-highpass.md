@@ -1,6 +1,6 @@
 # 0015 — NFM sub-audible high-pass as a long linear-phase FIR
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-12
 - Issue: [#84](https://github.com/n0nuser/radiotui/issues/84)
 

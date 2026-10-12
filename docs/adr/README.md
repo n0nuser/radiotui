@@ -18,10 +18,10 @@ Numbered in the order the decision was made. Status is `Accepted` unless noted.
 | [0012](0012-decoupled-reader-thread.md) | Decoupled reader thread so audio is produced at real time | 2026-08-23 |
 | [0013](0013-windowed-sinc-channel-filter.md) | Windowed-sinc channel filter evaluated polyphase | 2026-08-23 |
 | [0014](0014-tuner-session-owns-handoffs.md) | One session thread owns every tuner handoff | 2026-10-12 |
-| [0015](0015-nfm-subaudible-highpass.md) | NFM sub-audible high-pass as a long linear-phase FIR (Proposed) | 2026-10-12 |
-| [0016](0016-ssb-and-cw-modes.md) | SSB and CW by shift, complex low-pass and real part (Proposed) | 2026-10-12 |
-| [0017](0017-ctcss-dcs-tone-squelch.md) | CTCSS/DCS detection and a tone squelch (Proposed) | 2026-10-12 |
-| [0018](0018-nfm-noise-squelch.md) | NFM noise squelch on discriminator noise above the voice band (Proposed) | 2026-10-12 |
+| [0015](0015-nfm-subaudible-highpass.md) | NFM sub-audible high-pass as a long linear-phase FIR | 2026-10-12 |
+| [0016](0016-ssb-and-cw-modes.md) | SSB and CW by shift, complex low-pass and real part | 2026-10-12 |
+| [0017](0017-ctcss-dcs-tone-squelch.md) | CTCSS/DCS detection and a tone squelch | 2026-10-12 |
+| [0018](0018-nfm-noise-squelch.md) | NFM noise squelch on discriminator noise above the voice band | 2026-10-12 |
 
 Studies and alternatives investigated during these decisions live in
 [`../research/`](../research/) and [`../reasoning_logs/`](../reasoning_logs/).
