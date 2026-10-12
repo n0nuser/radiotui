@@ -54,3 +54,21 @@ enough to capture the limiter silences that noise. The NFM channel rate
 When enabled, NFM listening goes silent between transmissions, as on a radio.
 If the threshold transfers between units, this can become the default and
 reduce the RF gate to a fallback. That would amend ADR 0008.
+
+## Implementation notes (#87, 2026-10-12)
+
+- The IQ DC correction is applied to the noise **measurement** only; audio is
+  still demodulated from the raw channel. A slow mean also cancels an
+  unmodulated carrier sitting exactly on the LO, and the audio gains nothing
+  from it: with a signal present the DC spike is small next to it, and
+  without one the squelch is closed. Measured on the simulator: noise plus a
+  DC offset 12 dB above it reads −32 dB of quieting without the correction
+  and −0.7 dB with it.
+- The decision is made per monitor block (64 ms at 1.024 MS/s), not per
+  20 ms sub-block. With the 300 ms hang and 3 dB hysteresis that is enough to
+  open and close cleanly; sub-blocks are the upgrade if the opening latency
+  shows on hardware.
+- `noise_squelch_db` is the quieting needed to open, as a positive number
+  (3–40 dB in the settings menu), so stepping right from `off` starts at the
+  loosest setting, like the RF gate.
+

@@ -94,7 +94,13 @@ class VoxRecorder:
             return float("inf")
         return now - self.last_voice_ts
 
-    def feed(self, pcm: bytes, rate_hz: int | None = None, rssi_dbfs: float | None = None) -> None:
+    def feed(
+        self,
+        pcm: bytes,
+        rate_hz: int | None = None,
+        rssi_dbfs: float | None = None,
+        squelch_open: bool = True,
+    ) -> None:
         if rate_hz is not None:
             self._rate = rate_hz
         level_dbfs = pcm_rms_dbfs(pcm)
@@ -107,6 +113,8 @@ class VoxRecorder:
         )
         if self._squelch_dbfs is not None and (rssi_dbfs is None or rssi_dbfs < self._squelch_dbfs):
             voiced = False  # RF gate: no carrier on frequency, however hot the hiss
+        if not squelch_open:
+            voiced = False  # noise squelch closed: no carrier has captured the channel
         if voiced:
             self.last_voice_ts = time.time()
         if self._file is not None and rssi_dbfs is not None:
