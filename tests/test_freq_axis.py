@@ -61,8 +61,6 @@ async def test_spectrum_bottom_row_is_the_axis():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.3)
         freqs = np.linspace(87.5e6, 108e6, 512)
         power = np.full_like(freqs, -60.0)

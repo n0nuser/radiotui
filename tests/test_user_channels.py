@@ -254,13 +254,12 @@ async def test_startup_loads_bookmarks_into_table_names():
     settings = Settings(scanner=ScannerSettings(min_persist_frames=1))
     app = RadioTuiApp(force_sim=True, settings=settings)
     async with app.run_test(size=(140, 40)) as pilot:
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.3)
         assert app.user_channels.name_for(145.501e6) == "2m calling"
         # Next detection frame: the bookmarked carrier gets its name, the
         # ignored birdie never surfaces.
-        tracker = app.sweeper._tracker
+        tracker = ChannelTracker(settings.scanner)
+        tracker.set_user_channels(app.user_channels)
         active = tracker.update([make_peak(145.503e6), make_peak(96.0e6)], T0)
         app.refresh_table(active)
         await pilot.pause(0.1)
@@ -281,8 +280,6 @@ async def test_startup_warns_on_malformed_file():
 async def test_b_keys_prompt_saves_named_bookmark():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.3)
         channels = await seed_table(app, 145.5e6)
         await pilot.press("b")
@@ -302,8 +299,6 @@ async def test_b_keys_prompt_saves_named_bookmark():
 async def test_escape_cancels_bookmark_without_writing():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.3)
         await seed_table(app, 145.5e6)
         await pilot.press("b")
@@ -317,8 +312,6 @@ async def test_escape_cancels_bookmark_without_writing():
 async def test_x_ignores_selected_channel_and_persists():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.3)
         channels = await seed_table(app, 145.5e6)
         app.refresh_table(channels)

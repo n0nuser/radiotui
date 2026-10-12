@@ -9,7 +9,9 @@ import numpy as np
 from textual.widgets import DataTable, Static
 
 from radiotui.core.models import ScanState, SpectrumFrame
+from radiotui.scanner.session import ScanUpdate
 from radiotui.tui.app import RadioTuiApp
+from tests.tui_waits import wait_sweeping
 
 
 def meter_text(app: RadioTuiApp) -> str:
@@ -53,16 +55,16 @@ async def test_status_bar_shows_sweep_progress_and_paused_state():
         await pilot.pause(0.5)
         assert "hop" in meter_text(app), "no hop counter while sweeping"
 
-        app.sweeper.stop()
+        app.session.pause_sweep()
+        assert await wait_sweeping(pilot, app, False)
         app.refresh_status()
-        await pilot.pause(0.1)
         assert "paused" in meter_text(app)
 
 
 async def test_completed_sweep_is_announced():
     """A finished pass must say so, with what it found.
 
-    The frame is delivered straight to the queue rather than waiting on a live
+    The frame is delivered as a session event rather than waiting on a live
     sweep: what matters here is that a completed sweep is announced, and
     simulator throughput varies far too much across machines to gate on.
     """
@@ -70,14 +72,18 @@ async def test_completed_sweep_is_announced():
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
         freqs = np.linspace(87.5e6, 108e6, 512)
-        app.queue.put(
-            ScanState(
-                frame=SpectrumFrame(freqs_hz=freqs, power_db=np.full_like(freqs, -55.0)),
-                channels=[],
-                noise_floor_db=-62.0,
-                threshold_db=-53.0,
-                sweeps_done=7,
-                elapsed=3.2,
+        app.post_message(
+            RadioTuiApp.SessionUpdate(
+                ScanUpdate(
+                    ScanState(
+                        frame=SpectrumFrame(freqs_hz=freqs, power_db=np.full_like(freqs, -55.0)),
+                        channels=[],
+                        noise_floor_db=-62.0,
+                        threshold_db=-53.0,
+                        sweeps_done=7,
+                        elapsed=3.2,
+                    )
+                )
             )
         )
         await pilot.pause(0.4)

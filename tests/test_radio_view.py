@@ -6,6 +6,7 @@ from textual.widgets import Static
 from radiotui.audio.recorder import VoxRecorder
 from radiotui.config import BANDS, AudioSettings, ScannerSettings
 from radiotui.tui.app import RadioTuiApp, SettingsModal
+from tests.tui_waits import listen_hz, wait_listening, wait_not_listening, wait_until
 
 
 def meter_text(app: RadioTuiApp) -> str:
@@ -17,8 +18,6 @@ async def open_radio_app():
 
     app = RadioTuiApp(force_sim=True, settings=Settings())
     async with app.run_test(size=(140, 40)) as pilot:
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.3)
         yield app, pilot
 
@@ -36,8 +35,6 @@ async def test_t_toggles_advanced_panels():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.2)
         await pilot.press("t")
         await pilot.pause(0.2)
@@ -82,14 +79,10 @@ async def test_enter_in_radio_view_listens_under_cursor():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.2)
         target = app.cursor_hz
         await pilot.press("enter")
-        await pilot.pause(0.5)
-        assert app.monitor is not None
-        assert app.monitor.freq_hz == pytest.approx(target)
+        assert await wait_listening(pilot, app, target)
         app.stop_monitor()
 
 
@@ -97,8 +90,6 @@ async def test_settings_menu_edits_threshold_and_squelch():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.2)
         scanner = app.settings.scanner
         base = scanner.threshold_margin_db
@@ -130,12 +121,7 @@ async def test_m_key_mutes_via_shifted_binding():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.2)
-        seed = 100.0e6
-        channel = app.sweeper._tracker.channels.get(seed)
-        assert channel is None or True  # seeding not needed for mute path
         await pilot.press("M")
         await pilot.pause(0.2)
         # no monitor: mute action logs nothing but must not crash or open menu
@@ -175,18 +161,13 @@ async def test_sweep_key_refuses_while_listening():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.2)
         await pilot.press("enter")  # radio view: listens under cursor
-        await pilot.pause(0.5)
-        assert app.monitor is not None
-        was_running = app.sweeper.running
+        assert await wait_listening(pilot, app)
         await pilot.press("s")
-        await pilot.pause(0.2)
-        assert app.monitor is not None, "sweep key must not kill the monitor"
-        assert app.sweeper.running == was_running
-        assert "press l first" in "\n".join(app._events)
+        assert await wait_until(pilot, lambda: "press l first" in "\n".join(app._events))
+        assert listen_hz(app) is not None, "sweep key must not kill the monitor"
+        assert not app.session.status().sweeping
         app.stop_monitor()
 
 
@@ -194,16 +175,9 @@ async def test_band_switch_stops_monitor():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.2)
-        target = app.cursor_hz
         await pilot.press("enter")
-        await pilot.pause(0.5)
-        assert app.monitor is not None
-        bands = sorted(__import__("radiotui").config.BANDS)
-        other = next(b for b in bands if BANDS[b].start_hz > 1e8 and b != "fm_broadcast")
+        assert await wait_listening(pilot, app)
+        other = next(b for b in sorted(BANDS) if BANDS[b].start_hz > 1e8 and b != "fm_broadcast")
         app.start_band(other)
-        await pilot.pause(0.3)
-        assert app.monitor is None
-        del target
+        assert await wait_not_listening(pilot, app)
