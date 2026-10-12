@@ -117,9 +117,8 @@ def test_reads_are_not_delayed_by_demodulation(monkeypatch):
 def test_monitor_turns_every_delivered_block_into_audio():
     """Nothing the device hands over may be dropped on the way to the speaker."""
     device = PacedDevice(seed=1)
-    monitor = ChannelMonitor(device, 96.9e6, DemodMode.WFM, Settings(), muted=False)
     player = CountingPlayer()
-    monitor.player = player
+    monitor = ChannelMonitor(device, 96.9e6, DemodMode.WFM, Settings(), muted=False, player=player)
 
     monitor.start()
     time.sleep(1.5)
@@ -197,8 +196,9 @@ def test_dead_reader_is_reported_even_when_its_error_is_dropped():
             return super().read_samples(count)
 
     errors: list[str] = []
-    monitor = ChannelMonitor(FailingDevice(seed=1), 100e6, DemodMode.WFM, Settings(), muted=True)
-    monitor.on_error = errors.append
+    monitor = ChannelMonitor(
+        FailingDevice(seed=1), 100e6, DemodMode.WFM, Settings(), muted=True, on_error=errors.append
+    )
     monitor.start()
 
     real_put = monitor._blocks.put

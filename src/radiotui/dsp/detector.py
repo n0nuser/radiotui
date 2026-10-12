@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections import deque
 
@@ -70,10 +71,14 @@ class ChannelTracker:
         self._sweep_number = 0
         self._buckets: dict[int, set[float]] = {}
         self.user_channels = UserChannels()
+        # update() runs on the sweeper thread while the UI and the headless
+        # export read active_channels(); iterating the dict mid-update raises.
+        self._lock = threading.Lock()
 
     def set_user_channels(self, user_channels: UserChannels) -> None:
         """Live-apply bookmarks (names) and ignores (birdie silencing)."""
-        self.user_channels = user_channels
+        with self._lock:
+            self.user_channels = user_channels
 
     def _key(self, freq_hz: float) -> float:
         return round(freq_hz / 5_000.0) * 5_000.0
@@ -96,6 +101,10 @@ class ChannelTracker:
         return DemodMode.NFM
 
     def update(self, peaks: list[Peak], now: float | None = None) -> list[Channel]:
+        with self._lock:
+            return self._update(peaks, now)
+
+    def _update(self, peaks: list[Peak], now: float | None) -> list[Channel]:
         now = now if now is not None else time.time()
         self._sweep_number += 1
         matched_keys: set[float] = set()
@@ -188,4 +197,6 @@ class ChannelTracker:
         return best_key if best_key is not None else self._key(center_hz)
 
     def active_channels(self) -> list[Channel]:
-        return sorted(self._annotate(self._active()), key=lambda c: c.peak_db, reverse=True)
+        with self._lock:
+            active = self._annotate(self._active())
+        return sorted(active, key=lambda c: c.peak_db, reverse=True)

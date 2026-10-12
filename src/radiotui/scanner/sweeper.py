@@ -21,6 +21,9 @@ def channel_key(freq_hz: float) -> float:
 
 
 class Sweeper:
+    #: Join budget for stop(); a USB read can block this long.
+    STOP_TIMEOUT_S = 5.0
+
     def __init__(
         self,
         device: SdrDevice,
@@ -67,12 +70,20 @@ class Sweeper:
         self._thread = threading.Thread(target=self._run, name="sweeper", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
+        """Stop the sweep; False if the thread is still alive (a wedged read).
+
+        A sweeper that failed to stop keeps reporting ``running``, so nobody
+        hands the tuner to a monitor while it may still read (ADR 0004).
+        """
         self._stop.set()
         self._release_event.set()
         if self._thread is not None:
-            self._thread.join(timeout=5.0)
+            self._thread.join(timeout=self.STOP_TIMEOUT_S)
+            if self._thread.is_alive():
+                return False
             self._thread = None
+        return True
 
     def release_hold(self) -> None:
         self._release_event.set()

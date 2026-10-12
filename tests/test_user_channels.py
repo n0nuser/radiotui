@@ -236,8 +236,6 @@ def test_export_includes_names(tmp_path):
 
 async def seed_table(app, *freqs):
     channels = [make_channel(freq, active=True) for freq in freqs]
-    for channel in channels:
-        app.sweeper._tracker.channels[channel.center_hz] = channel
     app.refresh_table(channels)
     return channels
 
