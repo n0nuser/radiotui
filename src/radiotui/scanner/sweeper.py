@@ -106,7 +106,7 @@ class Sweeper:
                 break
             if now < self._cooldown_until.get(channel_key(ch.center_hz), 0.0):
                 continue
-            return HoldRequest(freq_hz=ch.listen_hz, demod=ch.demod, snr_db=ch.snr_db)
+            return HoldRequest(ch.listen_hz, ch.demod, ch.snr_db, channel_hz=ch.center_hz)
         return None
 
     def _publish(self, state: ScanState, must_deliver: bool) -> bool:

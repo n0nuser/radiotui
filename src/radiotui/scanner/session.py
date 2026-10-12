@@ -531,7 +531,7 @@ class TunerSession:
         assert request is not None
         sweeper = self._sweeper
         if sweeper is not None:
-            sweeper.cooldown_channel(request.freq_hz)
+            sweeper.cooldown_channel(request.channel_hz)
         clips = self._stop_monitor()
         self._emit(HoldReleased(request.freq_hz, reason, clips))
         self._release_parked_sweeper()

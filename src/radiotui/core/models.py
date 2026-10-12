@@ -81,9 +81,16 @@ class Peak:
 class HoldRequest:
     """Autonomous-mode request to pause sweeping and monitor a live channel."""
 
+    #: Where to tune: the carrier for SSB, else the peak.
     freq_hz: float
     demod: DemodMode
     snr_db: float
+    #: The detected peak; cooldown is keyed on it, like the tracker.
+    channel_hz: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.channel_hz is None:
+            object.__setattr__(self, "channel_hz", self.freq_hz)
 
 
 @dataclass(frozen=True)
