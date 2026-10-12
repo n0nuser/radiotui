@@ -20,14 +20,16 @@ job runs the full suite.
 
 ## Invariants
 
-- **One tuner, one consumer.** The sweeper or a single monitor owns the
-  device, never both. `monitor.stop()` can block on a USB read, so it runs
-  through `_stop_monitor_worker`. Whatever takes the tuner next starts from
-  that worker's completion callback, and `_close_device` waits for pending
-  stops ([ADR 0004](docs/adr/0004-single-consumer-tuner.md),
-  [ADR 0011](docs/adr/0011-asynchronous-monitor-handoff.md)).
-- **Threads reach the UI through messages.** Background threads use the
-  scan queue drained by `poll_queue`, `post_message`, or `call_from_thread`.
+- **One tuner, one consumer.** The sweeper or a single monitor reads the
+  device, never both. Only `TunerSession` starts, stops or hands over a
+  reader, on its own thread; the TUI and CLI send it requests and never touch
+  the sweeper, monitor or device directly. Device commands go through the
+  session so they run between reads
+  ([ADR 0004](docs/adr/0004-single-consumer-tuner.md),
+  [ADR 0014](docs/adr/0014-tuner-session-owns-handoffs.md)).
+- **Threads reach the UI through messages.** Session events reach the TUI
+  through `post_message`; never `call_from_thread` from the session thread,
+  which must not block on the event loop.
 - **DSP is NumPy-only.** New filters extend the existing NumPy patterns
   ([ADR 0002](docs/adr/0002-numpy-only-receive-chain.md)).
 

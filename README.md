@@ -351,7 +351,7 @@ src/radiotui/
 ├── core/            shared models (Channel, ScanState, ...)
 ├── sdr/             device abstraction: real RtlSdr (+compat shim) and simulator
 ├── dsp/             FFT PSD, noise floor, peak detection/tracking
-├── scanner/         sweeper thread, channel monitor (listen/record loop)
+├── scanner/         tuner session (owns every handoff), sweeper thread, channel monitor
 ├── audio/           demodulators, DSP classifier, player, VOX recorder
 ├── antenna/         wavelength math + recommendations
 └── tui/             Textual app: radio-first view, panels, widgets
