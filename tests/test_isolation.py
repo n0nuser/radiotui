@@ -4,8 +4,7 @@ from pathlib import Path
 
 from radiotui.channels_file import channels_file_path
 from radiotui.config_file import config_path
-
-from .conftest import REAL_CONFIG_DIR
+from tests.conftest import REAL_CONFIG_DIR
 
 
 def test_user_files_resolve_under_tmp_path(tmp_path):

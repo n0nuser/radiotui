@@ -49,8 +49,6 @@ async def test_comma_toggles_peak_sort_with_header_marker():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.3)
         table = app.query_one("#channels", DataTable)
         app.refresh_table([make_channel(101.0e6, -20), make_channel(98.0e6, -40)])
@@ -104,8 +102,6 @@ async def test_cursor_follows_same_channel_across_refreshes():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()  # keep the live sweeper from rewriting the table
         await pilot.pause(0.3)
         table = app.query_one("#channels", DataTable)
         channels = [

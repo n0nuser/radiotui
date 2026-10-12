@@ -65,8 +65,7 @@ class ReaderSampler:
         self._thread.start()
 
     def _count(self) -> int:
-        sweeper = self._session._sweeper
-        parked = sweeper is not None and sweeper.holding_active()
+        parked = self._session.status().sweep_parked
         count = 0
         for thread in threading.enumerate():
             if thread in self._ignore:

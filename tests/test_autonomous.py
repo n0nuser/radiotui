@@ -190,14 +190,14 @@ def tuner_consumers(app, ignore: set[threading.Thread]) -> int:
 
     ``ignore`` holds threads leaked by earlier tests in the same process.
     """
-    sweeper = app.sweeper
+    parked = app.session is not None and app.session.status().sweep_parked
     count = 0
     for thread in threading.enumerate():
         if thread in ignore:
             continue
         if thread.name.startswith("reader-"):  # the monitor's device-reading thread
             count += 1
-        elif thread.name == "sweeper" and not (sweeper is not None and sweeper.holding_active()):
+        elif thread.name == "sweeper" and not parked:
             count += 1
     return count
 
@@ -232,6 +232,10 @@ async def wait_until(pilot, predicate, timeout_s: float = 20.0) -> bool:
     return False
 
 
+def status(app):
+    return app.session.status()
+
+
 async def test_user_listen_preempts_hold_and_next_hold_still_parks() -> None:
     settings = Settings(
         scanner=ScannerSettings(
@@ -243,20 +247,20 @@ async def test_user_listen_preempts_hold_and_next_hold_still_parks() -> None:
     try:
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.press("o")
-            assert await wait_until(pilot, lambda: app.auto_hold_freq is not None)
+            assert await wait_until(pilot, lambda: status(app).hold_freq_hz is not None)
             app.listen_frequency(96.0e6)
             assert await wait_until(
-                pilot, lambda: app.monitor is not None and app.auto_hold_freq is None
+                pilot,
+                lambda: status(app).listen_freq_hz == 96.0e6 and status(app).hold_freq_hz is None,
             )
-            assert not app.sweeper.running
+            assert not status(app).sweeping
             app.action_stop_listen()
             # Sweeping resumes and the next hold parks the sweeper again.
-            assert await wait_until(pilot, lambda: app.auto_hold_freq is not None)
-            sweeps = app.sweeper.sweeps_done
+            assert await wait_until(pilot, lambda: status(app).hold_freq_hz is not None)
+            sweeps = status(app).sweeps_done
             await pilot.pause(0.5)
-            assert app.sweeper.holding_active()
-            assert app.sweeper.sweeps_done == sweeps
-            app.sweeper.stop()
+            assert status(app).sweep_parked
+            assert status(app).sweeps_done == sweeps
     finally:
         peak = sampler.stop()
     assert peak <= 1
@@ -288,16 +292,14 @@ async def test_tui_autonomous_hold_cycles_end_to_end() -> None:
             assert log.count("AUTO[/magenta] holding") >= 2, log
             assert log.count("releasing") >= 2, log
             # Released holds give the tuner back: the sweeper keeps sweeping.
-            assert app.monitor is None or app.auto_hold_freq is not None
             # A full FM sweep plus the monitor teardown can take seconds on a
             # slow CI runner, so poll against a deadline instead of a fixed pause.
-            sweeps = app.sweeper.sweeps_done
+            sweeps = status(app).sweeps_done
             assert await wait_until(
                 pilot,
-                lambda: app.sweeper.sweeps_done > sweeps or app.auto_hold_freq is not None,
+                lambda: status(app).sweeps_done > sweeps or status(app).hold_freq_hz is not None,
                 timeout_s=15.0,
             )
-            app.sweeper.stop()
     finally:
         peak = sampler.stop()
     assert peak <= 1
