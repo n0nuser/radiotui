@@ -85,8 +85,12 @@ class ChannelMonitor:
         on_clip: Callable[[ClipInfo], None] | None = None,
         on_error: Callable[[str], None] | None = None,
         player: AudioPlayer | None = None,
+        before_read: Callable[[], None] | None = None,
     ) -> None:
         self._device = device
+        # Runs on the reader thread before every read, so device commands
+        # (gain) never overlap read_samples.
+        self._before_read = before_read
         self._freq_hz = freq_hz
         self._demod = demod
         self._settings = settings
@@ -250,6 +254,8 @@ class ChannelMonitor:
         block = self._settings.audio.block_size
         while not self._stop.is_set():
             try:
+                if self._before_read:
+                    self._before_read()
                 iq = self._device.read_samples(block)
             except (OSError, RuntimeError, ValueError) as exc:
                 # Record before handing over: if the queue is full because the

@@ -6,7 +6,9 @@ from textual.widgets import Static
 
 from radiotui.cli import render_scan
 from radiotui.core.models import DemodMode
+from radiotui.scanner.session import Rssi
 from radiotui.tui.app import RadioTuiApp
+from tests.tui_waits import wait_listening, wait_until
 
 
 def meter_text(app) -> str:
@@ -42,11 +44,11 @@ async def test_meter_shows_peak_hold_marker_and_delta():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
-        app.post_message(RadioTuiApp.RssiUpdate(-20))
+        app.post_message(RadioTuiApp.SessionUpdate(Rssi(-20)))
         await pilot.pause(0.4)
         at_peak = meter_text(app)
         assert "at peak" in at_peak
-        app.post_message(RadioTuiApp.RssiUpdate(-40))
+        app.post_message(RadioTuiApp.SessionUpdate(Rssi(-40)))
         await pilot.pause(0.4)
         dropped = meter_text(app)
         assert "vs peak" in dropped
@@ -59,9 +61,9 @@ async def test_meter_resets_peak_after_monitor_stops():
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
         app.start_monitor(100e6, DemodMode.WFM, muted=True, enable_recorder=False)
-        app.post_message(RadioTuiApp.RssiUpdate(-15))
+        assert await wait_listening(pilot, app)
+        app.post_message(RadioTuiApp.SessionUpdate(Rssi(-15)))
         await pilot.pause(0.3)
         assert app._peak_rssi > -100
         app.stop_monitor()
-        await pilot.pause(0.1)
-        assert app._peak_rssi == -120.0
+        assert await wait_until(pilot, lambda: app._peak_rssi == -120.0)

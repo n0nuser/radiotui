@@ -26,11 +26,8 @@ from radiotui.config import (
     Band,
     Settings,
     band_for_region,
-    band_needs_hf,
     clamp,
     effective_sample_rate,
-    enable_hf,
-    freq_needs_hf,
 )
 from radiotui.config_file import (
     ConfigError,
@@ -42,10 +39,22 @@ from radiotui.config_file import (
     runtime_settings,
 )
 from radiotui.core.models import DemodMode
-from radiotui.dsp.spectrum import SweepPlan
 from radiotui.export import export_channels
-from radiotui.scanner.monitor import ChannelMonitor, auto_hold_release_reason
-from radiotui.scanner.sweeper import Sweeper
+from radiotui.scanner.session import (
+    ClipSaved,
+    HoldEngaged,
+    HoldReleased,
+    ListenStarted,
+    ListenStopped,
+    Notice,
+    Rssi,
+    ScanUpdate,
+    SessionError,
+    SessionEvent,
+    SweepFailed,
+    SweepStarted,
+    TunerSession,
+)
 from radiotui.sdr.base import SdrDevice
 from radiotui.sdr.manager import OpenedDevice, hardware_diagnosis, open_device
 from radiotui.tui.app import run_tui
@@ -133,15 +142,6 @@ def apply_flag_defaults(args: argparse.Namespace) -> argparse.Namespace:
     args.ppm = args.ppm if hasattr(args, "ppm") else 0
     args.offset_tune = args.offset_tune if hasattr(args, "offset_tune") else False
     return args
-
-
-def announce_hf(device: SdrDevice) -> None:
-    if device.is_real:
-        ok = device.set_hf_mode(True)
-        state = "[green]ON[/green]" if ok else "[red]failed[/red]"
-        console.print(f"HF direct sampling (Q-branch): {state}")
-    else:
-        console.print("HF band: simulator mode")
 
 
 def apply_hw_options(device: SdrDevice, args) -> None:
@@ -298,22 +298,13 @@ def cmd_scan(args) -> None:
     settings.scanner.autonomous = args.autonomous
     device = open_device_or_exit(args.sim)
     apply_hw_options(device, args)
-    if enable_hf(band_needs_hf(band), settings.scanner):
-        announce_hf(device)
-    out: queue.Queue = queue.Queue(maxsize=4)
-
-    plan = SweepPlan.build(
-        band.start_hz,
-        band.end_hz,
-        effective_sample_rate(settings.scanner),
-        settings.scanner.fft_size,
-    )
-    sweeper = Sweeper(device, plan, settings.scanner, out)
+    events: queue.Queue = queue.Queue()
+    session = TunerSession.start(device, settings, events.put)
     user_channels, channels_warning = load_user_channels()
     if channels_warning:
         console.print(f"[yellow]channels file ignored:[/] {channels_warning}")
-    sweeper.set_user_channels(user_channels)
-    sweeper.start()
+    session.set_user_channels(user_channels)
+    plan = session.sweep(band)
     console.print(
         f"Sweeping [bold]{band.label}[/bold]:"
         f" {band.start_hz / 1e6:.3f} - {band.end_hz / 1e6:.3f} MHz"
@@ -322,47 +313,39 @@ def cmd_scan(args) -> None:
 
     t0 = time.time()
     last_export = 0.0
+    sweeps = 0
     try:
         with Live(console=console, refresh_per_second=4) as live:
-            while True:
+            while not (args.seconds and time.time() - t0 > args.seconds):
                 try:
-                    state = out.get(timeout=0.5)
+                    event = events.get(timeout=0.5)
                 except queue.Empty:
                     continue
-                if state.error:
-                    console.print(f"[red]Device error: {state.error}[/red]")
+                if isinstance(event, SweepFailed):
+                    console.print(f"[red]Device error: {escape(event.message)}[/red]")
                     break
-                live.update(render_scan(state, simulated=not device.is_real))
-                if args.export and sweeper.channels and time.time() - last_export > 30.0:
-                    _export_sweep(sweeper.channels, args.export, band, settings, sweeper)
-                    last_export = time.time()
-                if state.hold_request is not None:
-                    budget = None
-                    if args.seconds:
-                        budget = max(1.0, args.seconds - (time.time() - t0))
-                    _headless_auto_hold(
-                        device,
-                        sweeper,
-                        settings,
-                        state.hold_request,
-                        budget,
-                        band.label,
-                        band.channel_bw_hz,
-                    )
-                if args.seconds and time.time() - t0 > args.seconds:
-                    break
+                if not isinstance(event, ScanUpdate):
+                    _print_session_event(event, device)
+                    continue
+                live.update(render_scan(event.state, simulated=not device.is_real))
+                sweeps = event.state.sweeps_done
+                if args.export and time.time() - last_export > 30.0:
+                    channels = session.channels
+                    if channels:
+                        _export_sweep(channels, args.export, band, settings, sweeps)
+                        last_export = time.time()
     except KeyboardInterrupt:
         pass
     finally:
-        if args.export and sweeper.channels:
-            path = _export_sweep(sweeper.channels, args.export, band, settings, sweeper)
-            console.print(f"[green]Exported {len(sweeper.channels)} channel(s) to {path}[/green]")
-        _stop_reader(sweeper)
-        device.close()
+        channels = session.channels
+        if args.export and channels:
+            path = _export_sweep(channels, args.export, band, settings, sweeps)
+            console.print(f"[green]Exported {len(channels)} channel(s) to {path}[/green]")
+        _close_session(session, events, device)
     console.print("[dim]Scan stopped.[/dim]")
 
 
-def _export_sweep(channels, path_str: str, band: Band, settings, sweeper) -> Path:
+def _export_sweep(channels, path_str: str, band: Band, settings, sweeps: int) -> Path:
     context = {
         "band": band.label,
         "start_hz": band.start_hz,
@@ -372,83 +355,63 @@ def _export_sweep(channels, path_str: str, band: Band, settings, sweeper) -> Pat
         "bias_tee": settings.scanner.bias_tee,
         "offset_tune": settings.scanner.offset_tune,
         "sample_rate_hz": effective_sample_rate(settings.scanner),
-        "sweeps_completed": sweeper.sweeps_done,
+        "sweeps_completed": sweeps,
     }
     return export_channels(channels, path_str, context=context)
-
-
-def _stop_reader(reader: ChannelMonitor | Sweeper) -> None:
-    """Wait until the reader's threads are gone before the tuner is reused.
-
-    Releasing a hold or closing the device under a wedged read would put two
-    readers on the tuner (ADR 0004); headless, there is no UI to keep alive.
-    """
-    if reader.stop():
-        return
-    console.print("[yellow]Waiting for the device read to return...[/yellow]")
-    while not reader.stop():
-        pass  # each attempt already waits STOP_TIMEOUT_S
 
 
 def _print_clip(clip: ClipInfo) -> None:
     console.print(f"[green]clip saved[/green] {clip.path.name} ({clip.seconds:.1f}s)")
 
 
-def _print_monitor_error(message: str) -> None:
-    console.print(f"[red]{escape(message)}[/red]")
-
-
-def _headless_auto_hold(
-    device,
-    sweeper,
-    settings,
-    req,
-    budget_s: float | None = None,
-    band_label: str = "",
-    channel_bw_hz: float | None = None,
-) -> None:
-    freq_mhz = req.freq_hz / 1e6
-    console.print(
-        f"[magenta]AUTO[/magenta] holding {freq_mhz:.4f} MHz "
-        f"(SNR {req.snr_db:.0f} dB), VOX recording"
-    )
-    monitor = ChannelMonitor(
-        device,
-        req.freq_hz,
-        req.demod,
-        settings,
-        muted=True,
-        record=True,
-        band_label=band_label,
-        channel_bw_hz=channel_bw_hz,
-        on_clip=_print_clip,
-        on_error=_print_monitor_error,
-    )
-    monitor.start()
-    t_hold = time.time()
-    reason = "monitor stopped"
-    while monitor.running:
-        time.sleep(0.2)
-        held_for = time.time() - t_hold
-        release = auto_hold_release_reason(
-            monitor.silent_for(),
-            held_for,
-            settings.scanner.hold_release_s,
-            settings.scanner.max_hold_s,
-        )
-        if budget_s is not None and held_for >= budget_s and release in (None, "max hold"):
-            release = "out of time"
-        if release is not None:
-            reason = release
-            break
-    _stop_reader(monitor)  # closes any open clip before the list is read
-    clips = monitor.clips
-    if not clips:
-        console.print(f"[dim]AUTO hold ended ({reason}) without transmissions.[/dim]")
+def _print_hf(hf_ok: bool | None, device: SdrDevice) -> None:
+    if hf_ok is None:
+        return
+    if device.is_real:
+        state = "[green]ON[/green]" if hf_ok else "[red]failed[/red]"
+        console.print(f"HF direct sampling (Q-branch): {state}")
     else:
-        console.print(f"[dim]AUTO released ({reason}) after {len(clips)} clip(s).[/dim]")
-    sweeper.cooldown_channel(req.freq_hz)
-    sweeper.release_hold()
+        console.print("HF band: simulator mode")
+
+
+def _print_session_event(event: SessionEvent, device: SdrDevice) -> None:
+    """What the headless commands print for everything but scan updates."""
+    if isinstance(event, (SweepStarted, ListenStarted)):
+        _print_hf(event.hf_ok, device)
+    elif isinstance(event, ClipSaved):
+        _print_clip(event.clip)
+    elif isinstance(event, HoldEngaged):
+        req = event.request
+        console.print(
+            f"[magenta]AUTO[/magenta] holding {req.freq_hz / 1e6:.4f} MHz "
+            f"(SNR {req.snr_db:.0f} dB), VOX recording"
+        )
+    elif isinstance(event, HoldReleased):
+        if event.clips:
+            console.print(f"[dim]AUTO released ({event.reason}) after {event.clips} clip(s).[/dim]")
+        else:
+            console.print(f"[dim]AUTO hold ended ({event.reason}) without transmissions.[/dim]")
+    elif isinstance(event, (SessionError, SweepFailed)):
+        console.print(f"[red]{escape(event.message)}[/red]")
+    elif isinstance(event, Notice):
+        console.print(escape(event.message))
+
+
+def _close_session(session: TunerSession, events: queue.Queue, device: SdrDevice) -> int:
+    """Close the session, print what it reports on the way out; returns clips saved."""
+    session.close()
+    if not session.wait_closed(TunerSession.CLOSE_WAIT_S):
+        console.print("[yellow]A device read is stuck; leaving the device to the OS.[/yellow]")
+    clips = 0
+    while True:
+        try:
+            event = events.get_nowait()
+        except queue.Empty:
+            return clips
+        if isinstance(event, ClipSaved):
+            clips += 1
+        if not isinstance(event, ScanUpdate):
+            _print_session_event(event, device)
 
 
 def render_scan(state, simulated: bool = False) -> Table:
@@ -479,68 +442,65 @@ def render_scan(state, simulated: bool = False) -> Table:
     return table
 
 
-def run_monitor(args, freq: float, *, muted: bool, record: bool):
-    settings = args._settings  # main() always provides the merged settings
+def _start_listening(
+    args, freq: float, *, muted: bool, record: bool
+) -> tuple[TunerSession, SdrDevice, queue.Queue, DemodMode]:
     demod = DemodMode(args.demod) if args.demod else guess_demod(freq)
     device = open_device_or_exit(args.sim)
     apply_hw_options(device, args)
-    if enable_hf(freq_needs_hf(freq), settings.scanner):
-        announce_hf(device)
-    monitor = ChannelMonitor(
-        device,
-        freq,
-        demod,
-        settings,
-        muted=muted,
-        record=record,
-        on_clip=_print_clip,
-        on_error=_print_monitor_error,
-    )
-    return device, monitor
+    events: queue.Queue = queue.Queue()
+    session = TunerSession.start(device, args._settings, events.put)
+    session.listen(freq, demod, record=record, muted=muted)
+    return session, device, events, demod
+
+
+def _run_until_done(args, events: queue.Queue, device: SdrDevice) -> int:
+    """Print events until the listen ends, --seconds pass, or Ctrl+C; returns clips."""
+    t0 = time.time()
+    clips = 0
+    try:
+        while not (args.seconds and time.time() - t0 > args.seconds):
+            try:
+                event = events.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if isinstance(event, ListenStopped):
+                break  # it ended on its own; the reason was already printed
+            if isinstance(event, ClipSaved):
+                clips += 1
+            _print_session_event(event, device)
+    except KeyboardInterrupt:
+        pass
+    return clips
 
 
 def cmd_listen(args) -> None:
-    device, monitor = run_monitor(args, args.freq, muted=False, record=args.record)
-    mode = monitor.demod.value
+    session, device, events, demod = _start_listening(
+        args, args.freq, muted=False, record=args.record
+    )
     record_note = " Recording active clips." if args.record else ""
     console.print(
-        f"Listening [bold]{args.freq / 1e6:.4f} MHz[/bold] ({mode}). Ctrl+C to stop." + record_note
+        f"Listening [bold]{args.freq / 1e6:.4f} MHz[/bold] ({demod.value}). Ctrl+C to stop."
+        + record_note
     )
-    t0 = time.time()
     try:
-        monitor.start()
-        while monitor.running:
-            time.sleep(0.25)
-            if args.seconds and time.time() - t0 > args.seconds:
-                break
-    except KeyboardInterrupt:
-        pass
+        _run_until_done(args, events, device)
     finally:
-        _stop_reader(monitor)
-        device.close()
+        _close_session(session, events, device)
     console.print("[dim]Stopped.[/dim]")
 
 
 def cmd_record(args) -> None:
-    device, monitor = run_monitor(args, args.freq, muted=True, record=True)
-    clips_dir = monitor.recordings_dir
+    session, device, events, demod = _start_listening(args, args.freq, muted=True, record=True)
     console.print(
-        f"Recording [bold]{args.freq / 1e6:.4f} MHz[/bold] ({monitor.demod.value}) "
-        f"to {clips_dir}/ - Ctrl+C to stop."
+        f"Recording [bold]{args.freq / 1e6:.4f} MHz[/bold] ({demod.value}) "
+        f"to {args._settings.audio.recordings_dir}/ - Ctrl+C to stop."
     )
-    t0 = time.time()
     try:
-        monitor.start()
-        while monitor.running:
-            time.sleep(0.25)
-            if args.seconds and time.time() - t0 > args.seconds:
-                break
-    except KeyboardInterrupt:
-        pass
+        clips = _run_until_done(args, events, device)
     finally:
-        _stop_reader(monitor)  # closes any open clip before the list is read
-        device.close()
-    if not monitor.clips:
+        clips += _close_session(session, events, device)
+    if not clips:
         console.print("[yellow]No transmissions captured.[/yellow]")
 
 
@@ -550,37 +510,33 @@ def cmd_antenna(args) -> None:
 
 
 def cmd_tuner(args) -> None:
-    settings = args._settings  # main() always provides the merged settings
-    demod = DemodMode(args.demod) if args.demod else guess_demod(args.freq)
-    device = open_device_or_exit(args.sim)
-    peak_hold = {"db": -120.0}
-
-    def on_rssi(db: float) -> None:
-        peak_hold["db"] = decay_peak_db(peak_hold["db"], db)
-
-    monitor = ChannelMonitor(
-        device,
-        args.freq,
-        demod,
-        settings,
-        muted=True,
-        on_rssi=on_rssi,
-        on_error=_print_monitor_error,
-    )
+    session, device, events, demod = _start_listening(args, args.freq, muted=True, record=False)
     console.print(
         f"Tuner on {args.freq / 1e6:.4f} MHz ({demod.value}) - move the antenna! Ctrl+C to exit."
     )
+    rssi = peak = -120.0
     try:
-        monitor.start()
         with Live(console=console, refresh_per_second=10) as live:
-            while monitor.running:
-                live.update(render_meter(monitor.rssi_dbfs, peak_hold["db"], args.freq))
+            listening = True
+            while listening:
                 time.sleep(0.08)
+                while True:
+                    try:
+                        event = events.get_nowait()
+                    except queue.Empty:
+                        break
+                    if isinstance(event, Rssi):
+                        rssi = event.dbfs
+                        peak = decay_peak_db(peak, rssi)
+                    elif isinstance(event, ListenStopped):
+                        listening = False
+                    else:
+                        _print_session_event(event, device)
+                live.update(render_meter(rssi, peak, args.freq))
     except KeyboardInterrupt:
         pass
     finally:
-        _stop_reader(monitor)
-        device.close()
+        _close_session(session, events, device)
 
 
 def render_meter(rssi: float, peak: float, freq: float) -> Panel:

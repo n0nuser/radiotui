@@ -1,13 +1,11 @@
 """Issue #12: arbitrary frequency / range entry from the TUI (`f` key)."""
 
-import time
-from threading import Event
-
 import pytest
 from textual.widgets import Static
 
 from radiotui.core.models import DemodMode
 from radiotui.tui.app import RadioTuiApp, TuneModal, parse_tune_request
+from tests.tui_waits import listen_hz, wait_listening
 
 
 def test_parse_single_frequency_defaults_to_mhz():
@@ -53,11 +51,9 @@ async def test_f_opens_modal_and_frequency_starts_listening():
         for key in "100":
             await pilot.press(key)
         await pilot.press("enter")
-        await pilot.pause(0.5)
+        assert await wait_listening(pilot, app, 100e6)
         assert not isinstance(app.screen, TuneModal)
-        assert app.monitor is not None
-        assert app.monitor.freq_hz == pytest.approx(100e6)
-        assert app.monitor.demod == DemodMode.WFM
+        assert app.session.status().listen_demod == DemodMode.WFM
 
 
 async def test_escape_cancels():
@@ -68,14 +64,14 @@ async def test_escape_cancels():
         await pilot.press("escape")
         await pilot.pause(0.2)
         assert not isinstance(app.screen, TuneModal)
-        assert app.monitor is None
+        assert listen_hz(app) is None
 
 
 async def test_bad_input_shows_inline_error_and_keeps_sweep():
     app = RadioTuiApp(force_sim=True)
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        sweeper_running = app.sweeper.running
+        sweeping = app.session.status().sweeping
         await pilot.press("f")
         await pilot.pause(0.2)
         for key in "abc":
@@ -85,8 +81,8 @@ async def test_bad_input_shows_inline_error_and_keeps_sweep():
         error = str(app.screen.query_one("#tune-error", Static).render())
         assert error.strip()
         assert isinstance(app.screen, TuneModal)
-        assert app.monitor is None
-        assert app.sweeper.running == sweeper_running
+        assert listen_hz(app) is None
+        assert app.session.status().sweeping == sweeping
 
 
 async def test_range_sweeps_custom_band():
@@ -119,28 +115,3 @@ async def test_hf_range_switches_direct_sampling_on():
         assert app.settings.scanner.hf_mode
         assert app.plan.hop_centers_hz[0] >= 7.0e6
         assert app.plan.hop_centers_hz[-1] <= 7.3e6
-
-
-async def test_monitor_handoff_waits_for_old_reader_before_starting_new_one():
-    app = RadioTuiApp(force_sim=True)
-    async with app.run_test(size=(140, 40)) as pilot:
-        stopped = Event()
-        started: list[tuple[float, DemodMode]] = []
-
-        class SlowMonitor:
-            def stop(self) -> bool:
-                time.sleep(0.05)
-                stopped.set()
-                return True
-
-        app.monitor = SlowMonitor()
-        app._start_monitor_now = lambda freq, demod, muted, record, pause: started.append(
-            (freq, demod)
-        )
-        app.start_monitor(96.9e6, DemodMode.WFM, muted=True, enable_recorder=False)
-        assert started == []
-        await pilot.pause(0.01)
-        assert started == []
-        await pilot.pause(0.1)
-        assert stopped.is_set()
-        assert started == [(96.9e6, DemodMode.WFM)]

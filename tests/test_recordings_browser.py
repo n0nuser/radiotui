@@ -158,8 +158,6 @@ async def test_toggle_shows_populated_pane_and_hides_again(tmp_path, monkeypatch
     StubPlayer.started.clear()
     app = RadioTuiApp(force_sim=True, settings=Settings())
     async with app.run_test(size=(140, 40)) as pilot:
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.3)
         app.session_clips.append(make_clip(tmp_path))
         await pilot.press("c")
@@ -180,8 +178,6 @@ async def test_enter_on_clip_row_replays_without_starting_monitor(tmp_path, monk
     StubPlayer.started.clear()
     app = RadioTuiApp(force_sim=True, settings=Settings())
     async with app.run_test(size=(140, 40)) as pilot:
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.3)
         clip = make_clip(tmp_path)
         app.session_clips.append(clip)
@@ -192,7 +188,7 @@ async def test_enter_on_clip_row_replays_without_starting_monitor(tmp_path, monk
         assert StubPlayer.started, "replay must spin up an audio player"
         player = StubPlayer.started[-1]
         assert player.written, "replay must stream the wav content"
-        assert app.monitor is None
+        assert app.session.status().listening is None
         app._stop_replay()
         assert player.stopped
 
@@ -201,8 +197,6 @@ async def test_status_line_reports_session_clip_count(tmp_path):
     app = RadioTuiApp(force_sim=True, settings=Settings())
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
-        if app.sweeper is not None:
-            app.sweeper.stop()
         await pilot.pause(0.2)
         app.session_clips.append(make_clip(tmp_path))
         app.refresh_status()

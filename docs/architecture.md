@@ -11,7 +11,8 @@ line-numbered; find them with `grep` or CodeGraph.
 `SimulatedDevice` when no dongle opens (`DeviceUnavailable`) or `--sim` is set.
 Both implement `sdr.base.SdrDevice`. Tests subclass `SdrDevice` directly for
 fakes. The SDR layer has no locks. Exclusivity is a scheduling invariant
-enforced by the app ([ADR 0004](adr/0004-single-consumer-tuner.md)).
+([ADR 0004](adr/0004-single-consumer-tuner.md)) enforced by `TunerSession`
+([ADR 0014](adr/0014-tuner-session-owns-handoffs.md)).
 
 `sdr/rtlsdr_compat.py` patches ctypes so pyrtlsdr imports against librtlsdr
 2.x ([ADR 0001](adr/0001-pyrtlsdr-compat-shim.md)). HF bands (below 24 MHz)
@@ -24,14 +25,11 @@ use.
 | Thread | Owner | Talks to the UI via |
 | --- | --- | --- |
 | Textual event loop | `RadioTuiApp` | n/a |
-| `sweeper` | `scanner.sweeper.Sweeper` | bounded `queue.Queue[ScanState]` (maxsize 4, drops when full, except that a hold-carrying state blocks until queued), drained by `RadioTuiApp.poll_queue` every 0.15 s; only the latest state is used |
+| `tuner-session` | `scanner.session.TunerSession` | its `on_event` callback; the TUI wraps each event in `post_message(SessionUpdate(event))`, the CLI puts it on a queue its main thread drains |
+| `sweeper` | `scanner.sweeper.Sweeper` | none: `ScanState`s go into the session's inbox, tagged with the sweeper's generation; the session forwards the latest as `ScanUpdate` and handles hold requests and device errors (`SweepFailed`) |
 | `reader-<MHz>` | `scanner.monitor.ChannelMonitor` | none: the only thread that calls `read_samples` while listening; feeds a two-block queue to the demod thread ([ADR 0012](adr/0012-decoupled-reader-thread.md)) |
-| `monitor-<MHz>` | `scanner.monitor.ChannelMonitor` | `on_rssi` / `on_clip` / `on_error` callbacks passed to the constructor, which the app wires to `post_message` (`RssiUpdate`, `ClipSaved`, `MonitorError`). It is the only thread that touches the recorder while it runs: `set_recording` queues a request it applies between blocks. An exception escaping it is reported through `on_error` and ends the monitor |
-| teardown worker | `RadioTuiApp._stop_monitor_worker` (`run_worker(thread=True)`) | `call_from_thread(_monitor_stop_finished, callback)` |
+| `monitor-<MHz>` | `scanner.monitor.ChannelMonitor` | `on_rssi` / `on_clip` / `on_error` callbacks that the session turns into `Rssi`, `ClipSaved` and `SessionError` events. It is the only thread that touches the recorder while it runs: `set_recording` queues a request it applies between blocks. An exception escaping it is reported through `on_error` and ends the monitor |
 | player subprocess | `audio.player.AudioPlayer` | none (`ffplay` or `aplay` fed PCM over stdin) |
-
-Device errors in the sweeper arrive as a `ScanState` with `error` set.
-`poll_queue` logs the error and stops the sweeper.
 
 ## Receive chain (reader and monitor threads)
 
@@ -47,55 +45,47 @@ gate and the RF squelch gate. See ADRs 0002, 0003, 0006, 0008, 0010 and 0013.
 
 ## Tuner handoff
 
-**Sweeper to monitor** is synchronous. `_pause_sweeper_for_monitor` calls
-`sweeper.stop()` on the event loop, and auto-hold needs no stop at all because
-the sweeper has already parked itself (see below).
+Every handoff runs on the `tuner-session` thread
+([ADR 0014](adr/0014-tuner-session-owns-handoffs.md)). `TunerSession`'s public
+methods (`sweep`, `listen`, `stop_listening`, `pause_sweep`, `resume_sweep`,
+`set_autonomous`, `close`) only queue a request; the session thread handles
+them one at a time:
 
-**Monitor to anything** (a band switch, a new listen, a hold release, quit)
-always goes through the worker path, because `monitor.stop()` can block on a
-USB read:
+1. Stop the current reader. `ChannelMonitor.stop()` and `Sweeper.stop()`
+   join their threads for up to `STOP_TIMEOUT_S` each and return False while
+   one is still alive (a USB read can block); the session reports that once
+   and retries until the reader is gone.
+2. Apply HF direct sampling for the band (`sweep`) or frequency (`listen`).
+3. Start the next reader.
 
-1. `_detach_monitor` drops `self.monitor` immediately and sets `_ignore_rssi`,
-   so late readings from the dying thread are discarded.
-2. `_stop_monitor_worker(monitor, callback)` runs `monitor.stop()` (which
-   joins a possibly blocked USB read) in a worker thread and increments
-   `_monitor_stops_pending`. `stop()` returns False while a thread is still
-   alive; `_stop_until_stopped` then reports it once and keeps retrying, so
-   the handoff never starts a second reader. `Sweeper.stop()` reports the same
-   way: the TUI refuses to start another reader while it fails, and the
-   headless CLI waits until it succeeds before reusing the tuner.
-3. `_monitor_stop_finished` runs `callback` back on the event loop. That
-   callback is where the next sweep or monitor starts.
+When requests pile up behind a slow stop, only the latest tuner request runs,
+so rapid listen/listen/band presses never leave an orphan reader (#49). A
+listen pauses the sweep and remembers to resume it on `stop_listening`; `s`
+while listening is refused with a `Notice`.
 
-On shutdown, `_close_device` waits until `_monitor_stops_pending` reaches 0.
-Textual starts no workers while the app unmounts, so `on_unmount` stops a
-live monitor in a plain `tuner-teardown` thread instead. That thread closes
-the device when it is the last pending stop. `run_tui` waits for it with
-`wait_for_teardown`, bounded by `TEARDOWN_WAIT_S`, so a wedged USB read or
-audio pipe cannot hang the process on quit. If it times out, a warning goes
-to stderr and the OS reclaims the device. `_stops_lock` guards the counter both
-threads touch.
-Starting a listen pauses the sweeper with `_pause_sweeper_for_monitor` and
-sets `resume_sweep_after_listen`. Pressing `s` while a monitor is active is
-refused. See [ADR 0011](adr/0011-asynchronous-monitor-handoff.md).
+Device commands that must not overlap a read (`set_gain`) are queued and run
+by whichever thread is reading, through the `before_read` hook that `Sweeper`
+and `ChannelMonitor` call before every `read_samples`; with nothing reading,
+the session thread runs them.
+
+`close()` stops every reader and then closes the device. `run_tui` and the CLI
+wait up to `TunerSession.CLOSE_WAIT_S` with `wait_closed()`; a wedged read
+leaves the device to the OS (closing it under a live librtlsdr read can
+crash) and a warning goes to stderr.
 
 ## Autonomous scan-and-hold
 
 With `scanner.autonomous` set, the sweeper picks a `HoldRequest` from active
-channels (`_auto_hold_candidate`, which respects SNR and per-channel
-cooldown). It attaches the request to the `ScanState`, blocks until that state
-is queued (a dropped hold would park it forever), and then parks until
-`release_hold()`. `poll_queue` calls `_engage_auto_hold`, which starts the
-recording monitor directly (not through `start_monitor`, which is the user
-path and pre-empts a hold) and remembers the `(monitor, sweeper)` pair in
-`_hold`. Every `poll_queue` tick runs `_auto_release_check`, because the parked
-sweeper sends no states. `auto_hold_release_reason` decides when to let go:
-silence counts from the later of the hold start and the last voice, so a
-channel gets `hold_release_s` of grace before it is dropped as "no traffic".
-Release tears the monitor down through the handoff path, and
-`_monitor_stop_finished` calls `release_hold()` on the remembered sweeper only
-after that monitor has stopped. A user listen detaches the hold's monitor the
-same way, and its callback stops the parked sweeper instead. `Sweeper.start()`
-clears the release event that `stop()` leaves set. The
-headless `scan --autonomous` in `cli.py` reuses the same sweeper and monitor
-pieces without Textual.
+channels (`_auto_hold_candidate`, which respects SNR and per-channel cooldown).
+It attaches the request to the `ScanState` it publishes and parks until
+`release_hold()`. The session engages the hold by starting a recording,
+muted monitor on that channel (`HoldEngaged`). While a hold is active the
+session thread wakes every `HOLD_CHECK_S`, because the parked sweeper sends
+nothing, and asks `auto_hold_release_reason`: silence counts from the later
+of the hold start and the last voice, so a channel gets `hold_release_s` of
+grace before it is dropped as "no traffic". On release the session puts the
+channel on cooldown, stops the monitor, and only then releases the parked
+sweeper (`HoldReleased`). A user listen pre-empts a hold: the session stops
+the hold's monitor and then the parked sweeper, and resumes sweeping when the
+listen ends. Turning autonomous off releases an active hold. The TUI and
+`scan --autonomous` share this one policy.

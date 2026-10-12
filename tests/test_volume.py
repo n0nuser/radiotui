@@ -9,6 +9,7 @@ from radiotui.core.models import DemodMode
 from radiotui.scanner.monitor import ChannelMonitor
 from radiotui.sdr.simulator import SimulatedDevice
 from radiotui.tui.app import RadioTuiApp
+from tests.tui_waits import wait_listening
 
 
 def test_scale_pcm16_identity_at_unity():
@@ -106,13 +107,13 @@ async def test_volume_keys_adjust_level_and_status_shows_it():
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.2)
         app.start_monitor(145.5e6, DemodMode.NFM, muted=True, enable_recorder=False)
-        await pilot.pause(0.2)
+        assert await wait_listening(pilot, app)
         await pilot.press(">")
         await pilot.pause(0.1)
-        assert app.monitor.volume_db == 3.0
+        assert app.settings.audio.volume_db == 3.0
         meter = str(app.query_one("#meter", Static).render())
         assert "+3dB" in meter
         await pilot.press("<")
         await pilot.press("<")
         await pilot.pause(0.1)
-        assert app.monitor.volume_db == -3.0
+        assert app.settings.audio.volume_db == -3.0

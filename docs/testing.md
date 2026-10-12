@@ -19,7 +19,15 @@ async with app.run_test(size=(140, 40)) as pilot:
   SIM sweeper burns about 2 s and a key-heavy test appears to hang.
   `RadioTuiApp` defaults to `start_sweeper=False` (only `run_tui` passes
   `True`). If a test passes `start_sweeper=True` or presses `s`, call
-  `app.sweeper.stop()` before it drives keys.
+  `app.session.pause_sweep()` and wait for it before it drives keys.
+- **Wait for the session, don't read it straight away.** Listening, band
+  switches and sweep pauses happen on the `tuner-session` thread, so assert
+  through the waits in `tests/tui_waits.py` (`wait_listening`,
+  `wait_sweeping`, ...) and `app.session.status()`. Session behaviour itself
+  is tested without Textual in `tests/test_session.py`.
+- **Fakes return what the real thing returns.** `ChannelMonitor.stop()` and
+  `Sweeper.stop()` return a bool that the session retries on; a fake that
+  returns None makes the retry loop spin forever.
 - **User files are isolated for you.** The autouse `isolate_user_files`
   fixture in `tests/conftest.py` points `HOME`, `USERPROFILE` and
   `XDG_CONFIG_HOME` at `tmp_path` and makes it the working directory, so
