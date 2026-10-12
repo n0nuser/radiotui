@@ -18,6 +18,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on py3.10
     import tomli as tomllib
 
+from radiotui.audio.tones import TONE_WINDOW_HZ, is_valid_tone
 from radiotui.core.files import write_text_atomic
 from radiotui.core.models import DemodMode
 
@@ -44,6 +45,8 @@ class Bookmark:
     freq_hz: float
     name: str
     demod: DemodMode | None = None
+    #: Tone squelch applied when this bookmark is listened to (ADR 0017).
+    tone: str | None = None
 
 
 @dataclass(frozen=True)
@@ -62,16 +65,25 @@ class UserChannels:
     bookmarks: list[Bookmark] = field(default_factory=list)
     ignores: list[IgnoreEntry] = field(default_factory=list)
 
-    def name_for(self, freq_hz: float) -> str:
-        """Name of the closest bookmark within the association window."""
+    def _closest(self, freq_hz: float, window_hz: float = BOOKMARK_WINDOW_HZ) -> Bookmark | None:
+        """The closest bookmark within ``window_hz``."""
         best: Bookmark | None = None
-        best_dist = BOOKMARK_WINDOW_HZ
+        best_dist = window_hz
         for bookmark in self.bookmarks:
             dist = abs(bookmark.freq_hz - freq_hz)
             if dist <= best_dist:
                 best_dist = dist
                 best = bookmark
+        return best
+
+    def name_for(self, freq_hz: float) -> str:
+        best = self._closest(freq_hz)
         return best.name if best is not None else ""
+
+    def tone_for(self, freq_hz: float) -> str | None:
+        # Tighter than the name window: a wrong tone silences a channel.
+        best = self._closest(freq_hz, TONE_WINDOW_HZ)
+        return best.tone if best is not None else None
 
     def ignored(self, freq_hz: float) -> bool:
         return any(entry.contains(freq_hz) for entry in self.ignores)
@@ -102,7 +114,13 @@ def _parse_bookmark(entry: object, path: Path) -> Bookmark:
             raise ChannelsFileError(
                 f"[[bookmark]] has invalid demod '{demod_value}' (use: {valid}) in {path}"
             ) from None
-    return Bookmark(float(entry["freq_hz"]), name.strip(), demod)
+    tone = entry.get("tone")
+    if tone is not None and not (isinstance(tone, str) and is_valid_tone(tone)):
+        raise ChannelsFileError(
+            f'[[bookmark]] has invalid tone {tone!r} (a CTCSS tone such as "88.5"'
+            f' or a DCS code such as "D023N") in {path}'
+        )
+    return Bookmark(float(entry["freq_hz"]), name.strip(), demod, tone)
 
 
 def _parse_ignore(entry: object, path: Path) -> IgnoreEntry:
@@ -175,7 +193,7 @@ def _toml_string(value: str) -> str:
 def serialize_user_channels(channels: UserChannels) -> str:
     lines = [
         "# radiotui user channels",
-        "# [[bookmark]] freq_hz/name/demod - label known frequencies",
+        "# [[bookmark]] freq_hz/name/demod/tone - label known frequencies",
         "# [[ignore]]   freq_hz/width_hz/note - silence birdies and spurs",
     ]
     for bookmark in channels.bookmarks:
@@ -183,6 +201,8 @@ def serialize_user_channels(channels: UserChannels) -> str:
         lines.append(f"name = {_toml_string(bookmark.name)}")
         if bookmark.demod is not None:
             lines.append(f'demod = "{bookmark.demod.value}"')
+        if bookmark.tone is not None:
+            lines.append(f'tone = "{bookmark.tone}"')
     for entry in channels.ignores:
         lines += ["[[ignore]]", f"freq_hz = {_format_freq(entry.freq_hz)}"]
         if entry.width_hz != DEFAULT_IGNORE_WIDTH_HZ:

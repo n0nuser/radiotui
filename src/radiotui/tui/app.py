@@ -24,6 +24,7 @@ from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
 from radiotui.antenna.advisor import analyze, format_report
 from radiotui.audio.demod import CLARIFIER_LIMIT_HZ
 from radiotui.audio.player import AudioPlayer
+from radiotui.audio.tones import TONE_WINDOW_HZ, tone_near
 from radiotui.channels_file import (
     DEFAULT_IGNORE_WIDTH_HZ,
     Bookmark,
@@ -65,6 +66,7 @@ from radiotui.scanner.session import (
     SessionStatus,
     SweepFailed,
     SweepStarted,
+    ToneDetected,
     TunerSession,
 )
 from radiotui.sdr.manager import (
@@ -378,6 +380,7 @@ class RadioTuiApp(App):
         Binding("greater_than_sign", "volume_up", "Vol+", key_display=">", show=False),
         Binding("less_than_sign", "volume_down", "Vol-", key_display="<", show=False),
         Binding("d", "cycle_demod", "Mode", key_display="d", show=False),
+        Binding("T", "cycle_tone_squelch", "Tone", key_display="T", show=False),
         Binding("right_parenthesis", "clarifier(10)", "RIT+", key_display=")", show=False),
         Binding("left_parenthesis", "clarifier(-10)", "RIT-", key_display="(", show=False),
         Binding("right_square_bracket", "threshold_up", "Thr+", key_display="]", show=False),
@@ -605,6 +608,8 @@ class RadioTuiApp(App):
                 self.log_line("Monitor stopped")
             case ClipSaved(clip):
                 self._add_clip(clip)
+            case ToneDetected(freq_hz, tone) if tone is not None:
+                self.log_line(f"tone [cyan]{tone}[/cyan] on {freq_hz / 1e6:.4f} MHz")
             case HoldEngaged(request):
                 self.log_line(
                     f"[magenta]AUTO[/magenta] holding {request.freq_hz / 1e6:.4f} MHz "
@@ -661,7 +666,11 @@ class RadioTuiApp(App):
         self.row_keys = [ch.center_hz for ch in channels_sorted]
         now = time.time()
         wanted_keys = [str(ch.center_hz) for ch in channels_sorted]
-        cells_by_key = {str(ch.center_hz): self._row_cells(ch, now) for ch in channels_sorted}
+        tones = self.session.tones if self.session is not None else {}
+        cells_by_key = {
+            str(ch.center_hz): self._row_cells(ch, now, tone_near(tones, ch.center_hz))
+            for ch in channels_sorted
+        }
         if [row_key.value for row_key in table.rows] != wanted_keys:
             # Membership or order changed: rebuild the row structure.
             table.clear()
@@ -684,7 +693,7 @@ class RadioTuiApp(App):
     COLUMN_KEYS = ("name", "freq", "bw", "peak", "snr", "hits", "demod", "age")
 
     @staticmethod
-    def _row_cells(ch: Channel, now: float) -> tuple[str, ...]:
+    def _row_cells(ch: Channel, now: float, tone: str = "") -> tuple[str, ...]:
         return (
             ch.name,
             f"{ch.center_hz / 1e6:.4f}",
@@ -692,7 +701,7 @@ class RadioTuiApp(App):
             f"{ch.peak_db:.1f}",
             f"{ch.snr_db:.1f}",
             str(ch.hits),
-            ch.demod.value,
+            f"{ch.demod.value} {tone}".rstrip(),
             f"{now - ch.last_seen:.0f}",
         )
 
@@ -773,6 +782,10 @@ class RadioTuiApp(App):
             parts.append(f"listening {tuned_hz / 1e6:.4f} MHz ({demod}){mute}{rec}")
             if listening.clarifier_hz:
                 parts.append(f"RIT {listening.clarifier_hz:+.0f} Hz")
+            if listening.tone:
+                parts.append(f"tone {listening.tone}")
+            if listening.tone_squelch:
+                parts.append(f"[cyan]TSQ {listening.tone_squelch}[/cyan]")
             vol = f"vol {self.settings.audio.volume_db:+.0f}dB"
             if listening.backend:
                 parts.append(f"{vol} [dim]({listening.backend})[/dim]")
@@ -1169,6 +1182,23 @@ class RadioTuiApp(App):
             status.listen_freq_hz, demod, self.muted, enable_recorder=status.listening.recording
         )
 
+    def action_cycle_tone_squelch(self) -> None:
+        """off -> any -> the tone heard now -> off (ADR 0017)."""
+        status = self._status()
+        listening = status.listening if status is not None else None
+        if listening is None:
+            self.log_line("[yellow]Nothing is playing - press enter to listen first.[/yellow]")
+            return
+        if listening.tone_squelch is None:
+            selected = "any"
+        elif listening.tone_squelch == "any" and listening.tone:
+            selected = listening.tone
+        else:
+            selected = None
+        self.session.set_tone_squelch(selected)
+        self.log_line(f"Tone squelch {selected or 'off'}")
+        self.refresh_status()
+
     def action_clarifier(self, step_hz: int) -> None:
         status = self._status()
         if status is None or status.listening is None:
@@ -1250,7 +1280,7 @@ class RadioTuiApp(App):
         target = export_path_for(
             self.band_name, Path(self.settings.audio.recordings_dir), fmt="csv"
         )
-        path = export_channels(channels, target)
+        path = export_channels(channels, target, tones=self.session.tones)
         self.log_line(f"[green]Exported {len(channels)} channel(s)[/] -> {path}")
 
     def action_tune(self) -> None:
@@ -1267,11 +1297,27 @@ class RadioTuiApp(App):
             lambda name: self._save_bookmark(channel.center_hz, channel.demod, name),
         )
 
+    def _bookmark_tone(self, freq_hz: float) -> str | None:
+        """The tone squelch selected on this channel now, else the one saved."""
+        status = self._status()
+        listening = status.listening if status is not None else None
+        selected = listening.tone_squelch if listening is not None else None
+        near = status is not None and status.listen_freq_hz is not None
+        if (
+            near
+            and abs(status.listen_freq_hz - freq_hz) <= TONE_WINDOW_HZ
+            and selected not in (None, "any")
+        ):
+            return selected
+        return self.user_channels.tone_for(freq_hz)
+
     def _save_bookmark(self, freq_hz: float, demod: DemodMode, name: str | None) -> None:
         if not name:
             self.log_line("Bookmark cancelled")
             return
-        replaced = upsert_bookmark(self.user_channels, Bookmark(freq_hz, name, demod))
+        replaced = upsert_bookmark(
+            self.user_channels, Bookmark(freq_hz, name, demod, self._bookmark_tone(freq_hz))
+        )
         verb = "updated bookmark" if replaced else "bookmarked"
         self.log_line(f"[green]{verb}[/green] {freq_hz / 1e6:.4f} MHz as '{name}'")
         self._apply_user_channels()

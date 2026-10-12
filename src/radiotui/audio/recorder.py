@@ -47,6 +47,8 @@ class ClipInfo:
     demod: str = ""
     band: str = ""
     hardware: dict = field(default_factory=dict)
+    #: CTCSS tone or DCS code heard during the clip ("" if none).
+    tone: str = ""
 
 
 class VoxRecorder:
@@ -70,6 +72,13 @@ class VoxRecorder:
         self.on_clip_end = None
         self.on_error = None
         self.enabled = False
+        #: Seconds of gated audio kept and written when a clip opens: a tone
+        #: squelch opens only after it has verified the tone (ADR 0017).
+        self.preroll_s = 0.0
+        self._preroll: list[bytes] = []
+        #: Latest detected tone, set by the monitor.
+        self.tone: str | None = None
+        self._clip_tone = ""
         self.last_voice_ts: float | None = None
         extra = context or {}
         self._demod = str(extra.get("demod", ""))
@@ -117,16 +126,28 @@ class VoxRecorder:
             voiced = False  # noise squelch closed: no carrier has captured the channel
         if voiced:
             self.last_voice_ts = time.time()
+        if self._file is not None and self.tone:
+            self._clip_tone = self.tone
         if self._file is not None and rssi_dbfs is not None:
             self._rssi_values.append(rssi_dbfs)
+        if self.preroll_s <= 0:
+            self._preroll = []  # never replay audio held for an earlier selection
         if not self.enabled:
             return
         try:
             if voiced:
                 if self._file is None:
                     self._open_clip()
+                    for held in self._preroll:
+                        self._write(held)
+                    self._preroll = []
                 self._write(pcm)
                 self._hang_remaining_ms = self._settings.vox_hang_ms
+            elif self._file is None and self.preroll_s > 0:
+                self._preroll.append(pcm)
+                keep = self.preroll_s * self._rate * 2  # bytes of 16-bit mono
+                while len(self._preroll) > 1 and sum(map(len, self._preroll[1:])) >= keep:
+                    self._preroll.pop(0)
             elif self._file is not None:
                 self._hang_remaining_ms -= block_ms
                 if self._hang_remaining_ms <= 0:
@@ -176,6 +197,7 @@ class VoxRecorder:
         self._frames_written = 0
         self._clip_started_at = started_at
         self._rssi_values = []
+        self._clip_tone = self.tone or ""
 
     def _write(self, pcm: bytes) -> None:
         if self._file is None:
@@ -213,6 +235,7 @@ class VoxRecorder:
             demod=self._demod,
             band=self._band,
             hardware=dict(self._hardware),
+            tone=self._clip_tone,
         )
         self.clips.append(info)
         self._write_sidecar(info)
@@ -230,6 +253,7 @@ class VoxRecorder:
             "peak_rssi_dbfs": round(clip.peak_rssi_dbfs, 1),
             "mean_rssi_dbfs": round(clip.mean_rssi_dbfs, 1),
             "hardware": clip.hardware,
+            "tone": clip.tone or None,
         }
         try:
             sidecar = clip.path.with_suffix(".json")
