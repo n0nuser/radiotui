@@ -51,6 +51,13 @@ class SweepStarted:
 
 
 @dataclass(frozen=True)
+class SweepFailed:
+    """The device failed mid-sweep; the sweep has stopped."""
+
+    message: str
+
+
+@dataclass(frozen=True)
 class ListenStarted:
     freq_hz: float
     demod: DemodMode
@@ -100,6 +107,7 @@ class SessionError:
 SessionEvent = (
     ScanUpdate
     | SweepStarted
+    | SweepFailed
     | ListenStarted
     | ListenStopped
     | Rssi
@@ -200,6 +208,10 @@ class _SweeperOutbox:
 
 
 class TunerSession:
+    #: How long close may take: the monitor's two joins and the sweeper's
+    #: join (STOP_TIMEOUT_S each), plus the device close.
+    CLOSE_WAIT_S = 3 * ChannelMonitor.STOP_TIMEOUT_S + 1.0
+
     #: While a hold is active, how often the release policy is checked. With
     #: no hold the session thread sleeps until a request arrives.
     HOLD_CHECK_S = 0.15
@@ -380,7 +392,7 @@ class TunerSession:
     def _on_scan_states(self, states: list[ScanState], request_pending: bool) -> None:
         for state in states:
             if state.error:
-                self._emit(SessionError(f"Device error: {state.error}"))
+                self._emit(SweepFailed(state.error))
                 self._stop_sweeper()
                 return
         latest = states[-1]
