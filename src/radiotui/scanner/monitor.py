@@ -268,9 +268,7 @@ class ChannelMonitor:
 
     def set_tone_squelch(self, tone: str | None) -> None:
         """Hear only blocks carrying ``tone`` ("any" = any tone); None = off."""
-        self.tone_squelch = tone
-        # Keep what the verify window gates out, so clips lose nothing.
-        self._recorder.preroll_s = WINDOW_S if tone is not None else 0.0
+        self.tone_squelch = tone  # applied by the monitor thread on its next block
 
     def set_clarifier_hz(self, clarifier_hz: float) -> None:
         # Read by the monitor thread on its next block; a float store is atomic.
@@ -409,6 +407,8 @@ class ChannelMonitor:
             if len(audio):
                 pcm = audio_to_pcm16(audio)
                 self._track_tone()
+                # Keep what the verify window gates out, so clips lose nothing.
+                self._recorder.preroll_s = WINDOW_S if self.tone_squelch else 0.0
                 squelch_open = self._squelch_open(len(audio) / rate)
                 if not self.muted:
                     # Silence, not nothing: the player must stay fed.

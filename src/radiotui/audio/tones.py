@@ -50,6 +50,9 @@ GOLAY_POLY = 0xC75
 _MASK = (1 << 23) - 1
 
 WINDOW_S = 1.5
+#: A tone belongs to a frequency within this: under half the 12.5 kHz
+#: PMR/2 m channel spacing, so a neighbour's tone never applies.
+TONE_WINDOW_HZ = 6_000.0
 DETECT_RATE_HZ = 1_000.0
 #: Share of the buffer's power the tone must hold: a smeared voice
 #: fundamental never concentrates this much in one bin.
@@ -165,7 +168,7 @@ def _decode_dcs(samples: np.ndarray, fs: float) -> str | None:
 # ---- tone names ----
 
 
-def tone_near(tones: dict[float, str], freq_hz: float, window_hz: float = 12_500.0) -> str:
+def tone_near(tones: dict[float, str], freq_hz: float, window_hz: float = TONE_WINDOW_HZ) -> str:
     """The tone heard closest to ``freq_hz``, or "" (a channel's peak and the
     frequency it was listened on differ slightly)."""
     best, best_dist = "", window_hz

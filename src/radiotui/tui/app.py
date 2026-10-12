@@ -24,7 +24,7 @@ from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
 from radiotui.antenna.advisor import analyze, format_report
 from radiotui.audio.demod import CLARIFIER_LIMIT_HZ
 from radiotui.audio.player import AudioPlayer
-from radiotui.audio.tones import tone_near
+from radiotui.audio.tones import TONE_WINDOW_HZ, tone_near
 from radiotui.channels_file import (
     DEFAULT_IGNORE_WIDTH_HZ,
     Bookmark,
@@ -1305,7 +1305,7 @@ class RadioTuiApp(App):
         near = status is not None and status.listen_freq_hz is not None
         if (
             near
-            and abs(status.listen_freq_hz - freq_hz) <= 12_500.0
+            and abs(status.listen_freq_hz - freq_hz) <= TONE_WINDOW_HZ
             and selected not in (None, "any")
         ):
             return selected

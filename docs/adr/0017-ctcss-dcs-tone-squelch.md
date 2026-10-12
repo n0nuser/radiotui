@@ -101,4 +101,13 @@ pitch) as well as clean tones and noise.
   monitor callback, the same source as the `ToneDetected` event.
 - **Cost.** About 1.5 ms per 64 ms block for identify, DCS and verify
   together.
+- **Latency, measured on synthetic NFM.** A selected tone opens after 0.58 s
+  (88.5 Hz) to 1.15 s (151.4 Hz); `any` waits for a full identify window,
+  1.41 s. With the noise squelch **off** (the default) the tone squelch is
+  the only thing closing, so noise plays for 0.2–0.5 s after the sender
+  unkeys. With the noise squelch on, it closes as soon as the carrier drops.
+- **Association.** Tones attach to a frequency within 6 kHz, under half the
+  12.5 kHz PMR/2 m spacing: bookmark tones, the table, exports and saving a
+  selected tone into a bookmark. Bookmark *names* keep ADR 0005's 25 kHz;
+  a wrong name is only cosmetic, a wrong tone silences the channel.
 
