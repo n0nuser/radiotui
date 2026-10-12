@@ -16,6 +16,7 @@ from radiotui.scanner.session import (
     ListenStarted,
     ScanUpdate,
     SessionError,
+    SweepStarted,
     TunerSession,
 )
 from radiotui.sdr.simulator import SimulatedDevice
@@ -272,3 +273,19 @@ def test_an_unexpected_failure_does_not_kill_the_session():
     finally:
         session.close()
         assert session.wait_closed(10.0)
+
+
+def test_band_channel_width_applies_only_in_the_bands_own_mode():
+    """FM broadcast's 200 kHz must not reach a USB listen on the same band (#85)."""
+    session, _, events = make_session()
+    try:
+        session.sweep(BANDS["fm_broadcast"], start=False)
+        assert wait_for_event(events, SweepStarted) is not None
+        session.listen(101.3e6, DemodMode.WFM)
+        assert wait_until(lambda: session.status().listen_demod is DemodMode.WFM)
+        assert session._monitor._channel_bw_hz == 200_000.0
+        session.listen(101.3e6, DemodMode.USB)
+        assert wait_until(lambda: session.status().listen_demod is DemodMode.USB)
+        assert session._monitor._channel_bw_hz is None
+    finally:
+        session.close()

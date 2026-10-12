@@ -139,7 +139,7 @@ def test_user_band_registers_and_is_reachable(cfg_path):
         {"name": "x", "label": "X", "start_hz": 100e6},  # missing fields
         {"name": "fm_broadcast", "label": "dup", "start_hz": 88e6, "end_hz": 108e6, "demod": "wfm"},
         {"name": "bad", "label": "B", "start_hz": 200e6, "end_hz": 100e6, "demod": "am"},
-        {"name": "bad", "label": "B", "start_hz": 100e6, "end_hz": 200e6, "demod": "usb"},
+        {"name": "bad", "label": "B", "start_hz": 100e6, "end_hz": 200e6, "demod": "dmr"},
     ],
 )
 def test_bad_band_entries_raise(entry, cfg_path):

@@ -22,6 +22,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
 
 from radiotui.antenna.advisor import analyze, format_report
+from radiotui.audio.demod import CLARIFIER_LIMIT_HZ
 from radiotui.audio.player import AudioPlayer
 from radiotui.channels_file import (
     DEFAULT_IGNORE_WIDTH_HZ,
@@ -376,6 +377,9 @@ class RadioTuiApp(App):
         Binding("minus", "gain_down", "Gain-", key_display="-"),
         Binding("greater_than_sign", "volume_up", "Vol+", key_display=">", show=False),
         Binding("less_than_sign", "volume_down", "Vol-", key_display="<", show=False),
+        Binding("d", "cycle_demod", "Mode", key_display="d", show=False),
+        Binding("right_parenthesis", "clarifier(10)", "RIT+", key_display=")", show=False),
+        Binding("left_parenthesis", "clarifier(-10)", "RIT-", key_display="(", show=False),
         Binding("right_square_bracket", "threshold_up", "Thr+", key_display="]", show=False),
         Binding("left_square_bracket", "threshold_down", "Thr-", key_display="[", show=False),
         Binding("right_curly_bracket", "dwell_up", "Dwell+", key_display="}", show=False),
@@ -767,6 +771,8 @@ class RadioTuiApp(App):
             rec = " ●REC" if listening.capturing else ""
             mute = " 🔇" if self.muted else ""
             parts.append(f"listening {tuned_hz / 1e6:.4f} MHz ({demod}){mute}{rec}")
+            if listening.clarifier_hz:
+                parts.append(f"RIT {listening.clarifier_hz:+.0f} Hz")
             vol = f"vol {self.settings.audio.volume_db:+.0f}dB"
             if listening.backend:
                 parts.append(f"{vol} [dim]({listening.backend})[/dim]")
@@ -1045,7 +1051,7 @@ class RadioTuiApp(App):
         if channel is None:
             self.log_line("[yellow]No channel selected.[/yellow]")
             return
-        self.start_monitor(channel.center_hz, channel.demod, muted=False, enable_recorder=False)
+        self.start_monitor(channel.listen_hz, channel.demod, muted=False, enable_recorder=False)
 
     def action_toggle_autonomous(self) -> None:
         enabled = not self.settings.scanner.autonomous
@@ -1107,7 +1113,7 @@ class RadioTuiApp(App):
         if channel is None:
             self.log_line("[yellow]Select a channel first (or press Enter to listen).[/yellow]")
             return
-        self.start_monitor(channel.center_hz, channel.demod, muted=True, enable_recorder=True)
+        self.start_monitor(channel.listen_hz, channel.demod, muted=True, enable_recorder=True)
 
     def _step_cursor(self, delta: int) -> None:
         table = self.query_one("#channels", DataTable)
@@ -1136,6 +1142,29 @@ class RadioTuiApp(App):
             self.session.set_gain(self.gain_db)  # applied between reads
         else:
             self.settings.scanner.gain_db = self.gain_db
+        self.refresh_status()
+
+    def action_cycle_demod(self) -> None:
+        """Relisten on the same frequency in the next mode (ADR 0016)."""
+        status = self._status()
+        if status is None or status.listening is None or status.listen_demod is None:
+            self.log_line("[yellow]Nothing is playing - press enter to listen first.[/yellow]")
+            return
+        modes = list(DemodMode)
+        demod = modes[(modes.index(status.listen_demod) + 1) % len(modes)]
+        self.start_monitor(
+            status.listen_freq_hz, demod, self.muted, enable_recorder=status.listening.recording
+        )
+
+    def action_clarifier(self, step_hz: int) -> None:
+        status = self._status()
+        if status is None or status.listening is None:
+            self.log_line("[yellow]Nothing is playing - press enter to listen first.[/yellow]")
+            return
+        clarifier = clamp(
+            status.listening.clarifier_hz + step_hz, -CLARIFIER_LIMIT_HZ, CLARIFIER_LIMIT_HZ
+        )
+        self.session.set_clarifier_hz(clarifier)
         self.refresh_status()
 
     def action_volume_up(self) -> None:

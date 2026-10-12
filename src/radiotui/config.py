@@ -18,11 +18,11 @@ class Band:
 
 
 BANDS: dict[str, Band] = {
-    "hf_ham_80m": Band("hf_ham_80m", "80m Amateur", 3.5e6, 3.8e6, DemodMode.AM),
+    "hf_ham_80m": Band("hf_ham_80m", "80m Amateur", 3.5e6, 3.8e6, DemodMode.LSB, 2_700.0),
     "hf_broadcast": Band(
         "hf_broadcast", "HF Broadcast (SW)", 5.9e6, 15.6e6, DemodMode.AM, 10_000.0
     ),
-    "hf_ham_40m": Band("hf_ham_40m", "40m Amateur", 7.0e6, 7.2e6, DemodMode.AM),
+    "hf_ham_40m": Band("hf_ham_40m", "40m Amateur", 7.0e6, 7.2e6, DemodMode.LSB, 2_700.0),
     "fm_broadcast": Band("fm_broadcast", "FM Broadcast", 87.5e6, 108.0e6, DemodMode.WFM, 200_000.0),
     "airband": Band("airband", "Airband (AM)", 118.0e6, 137.0e6, DemodMode.AM, 8_330.0),
     "vhf_ham": Band("vhf_ham", "2m Amateur", 144.0e6, 146.0e6, DemodMode.NFM),

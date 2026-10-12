@@ -13,6 +13,18 @@ class DemodMode(str, Enum):
     NFM = "nfm"
     WFM = "wfm"
     AM = "am"
+    USB = "usb"
+    LSB = "lsb"
+    CW = "cw"
+
+
+#: A detected SSB peak is centred on the voice, about this far from the
+#: suppressed carrier a radio tunes to (ADR 0016).
+SSB_VOICE_CENTRE_HZ = 1_500.0
+_CARRIER_OFFSET_HZ = {
+    DemodMode.USB: -SSB_VOICE_CENTRE_HZ,
+    DemodMode.LSB: +SSB_VOICE_CENTRE_HZ,
+}
 
 
 @dataclass(frozen=True)
@@ -35,6 +47,11 @@ class Channel:
     misses: int = 0
     active: bool = False
     name: str = ""
+
+    @property
+    def listen_hz(self) -> float:
+        """Where to tune to hear this peak: SSB is tuned at its carrier."""
+        return self.center_hz + _CARRIER_OFFSET_HZ.get(self.demod, 0.0)
 
     def age_seconds(self, now: float | None = None) -> float:
         return (now if now is not None else time.time()) - self.last_seen
