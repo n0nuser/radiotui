@@ -62,7 +62,8 @@ USB read:
    `_monitor_stops_pending`. `stop()` returns False while a thread is still
    alive; `_stop_until_stopped` then reports it once and keeps retrying, so
    the handoff never starts a second reader. `Sweeper.stop()` reports the same
-   way, and callers refuse to start another reader while it fails.
+   way: the TUI refuses to start another reader while it fails, and the
+   headless CLI waits until it succeeds before reusing the tuner.
 3. `_monitor_stop_finished` runs `callback` back on the event loop. That
    callback is where the next sweep or monitor starts.
 
